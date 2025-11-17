@@ -2,7 +2,7 @@ import os, uuid, sys
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from passlib.hash import pbkdf2_sha256
 from dotenv import load_dotenv
-from db import get_db, init_db
+from .db import get_db, init_db
 
 load_dotenv()
 
