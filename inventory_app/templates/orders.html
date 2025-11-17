@@ -35,9 +35,9 @@
               {# Count items logic #}
               <span class="badge bg-info">View Items</span>
             </td>
-            <td>₹{{ "%.2f"|format(invoice.subtotal) }}</td>
-            <td>₹{{ "%.2f"|format(invoice.tax) }}</td>
-            <td><strong>₹{{ "%.2f"|format(invoice.total) }}</strong></td>
+            <td>${{ "%.2f"|format(invoice.subtotal) }}</td>
+            <td>${{ "%.2f"|format(invoice.tax) }}</td>
+            <td><strong>${{ "%.2f"|format(invoice.total) }}</strong></td>
             <td>{{ invoice.created_at.split(' ')[0] if invoice.created_at else "N/A" }}</td>
             <td>
               <a href="/invoices/{{ invoice.id }}" class="btn btn-sm btn-primary">View</a>
