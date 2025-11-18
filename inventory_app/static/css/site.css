@@ -1,0 +1,125 @@
+/* Shared site styles and unified font */
+:root {
+  --brand-blue: #007bff;
+  --muted: #666;
+  --bg-page: #f5f5f5;
+  --card-bg: #fff;
+}
+
+html, body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg-page);
+  color: #222;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+
+/* Container */
+.container {
+  max-width: 900px;
+  margin: 20px auto;
+  background: var(--card-bg);
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+}
+
+/* Small header tweaks used across pages */
+.d-flex.justify-content-between.align-items-center.mb-4,
+.page-header {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:18px;
+}
+
+/* Links / buttons used in headers */
+.back-link, .header-links a {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: #fff;
+  text-decoration: none;
+  background: #6c757d;
+  font-size: 13px;
+}
+.header-links a.primary,
+.header-links a.btn-primary {
+  background: var(--brand-blue);
+}
+
+/* Form, sections, tables and small utilities */
+h1, h2 { color: #333; margin-bottom: 12px; }
+.section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #ddd; }
+.section:last-child { border-bottom: none; }
+.section h2 { font-size: 18px; margin-bottom: 12px; color: #555; }
+
+.search-wrapper { position: relative; margin-bottom: 15px; }
+.search-box { display: flex; gap: 10px; }
+.search-box input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+
+.search-hint { font-size: 12px; color: #999; margin-bottom: 8px; }
+
+#search-results {
+  list-style: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  z-index: 1000;
+  display: none;
+  margin-top: 2px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.12);
+}
+#search-results.show { display: block; }
+#search-results li { padding: 12px 15px; border-bottom: 1px solid #eee; cursor: pointer; display:flex; justify-content:space-between; align-items:center; }
+#search-results li:hover { background: #f0f7ff; }
+#search-results li:last-child { border-bottom: none; }
+
+.item-info { flex: 1; }
+.item-name { font-weight: 600; color: #333; font-size: 14px; }
+.item-sku, .item-stock { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.item-actions { display:flex; gap:10px; align-items:center; }
+.item-price { font-weight:700; color: var(--brand-blue); min-width:80px; text-align:right; }
+.qty-input { width:50px; padding:5px; border:1px solid #ddd; border-radius:3px; text-align:center; }
+
+.add-btn { padding:6px 12px; background:#28a745; color:#fff; border:none; border-radius:3px; cursor:pointer; font-size:12px; }
+.add-btn:hover { background:#218838; }
+.add-btn:disabled { background:#ccc; cursor:not-allowed; }
+
+/* Cart table */
+.cart-table { width:100%; border-collapse:collapse; margin-bottom:15px; }
+.cart-table th { background:#f8f9fa; padding:10px; text-align:left; font-weight:700; border-bottom:2px solid #ddd; }
+.cart-table td { padding:10px; border-bottom:1px solid #eee; }
+.cart-table .remove-btn { padding:5px 10px; background:#dc3545; color:#fff; border:none; border-radius:3px; cursor:pointer; }
+.cart-table .remove-btn:hover { background:#c82333; }
+
+.cart-empty { text-align:center; padding:20px; color:#999; }
+
+.totals { text-align:right; padding:15px 0; font-size:16px; }
+.subtotal { color:var(--muted); }
+
+/* Form controls */
+.form-group { margin-bottom:15px; }
+.form-group label { display:block; margin-bottom:5px; font-weight:700; color:#333; }
+.form-group input, .form-group select { width:100%; padding:10px; border:1px solid #ddd; border-radius:4px; font-size:14px; }
+.form-row { display:grid; grid-template-columns:1fr 1fr; gap:15px; }
+
+.submit-btn { width:100%; padding:12px; background:var(--brand-blue); color:#fff; border:none; border-radius:4px; font-size:16px; font-weight:700; cursor:pointer; }
+.submit-btn:hover { background:#0056b3; }
+
+/* Alerts */
+.alert { padding:10px; margin-bottom:15px; border-radius:4px; }
+.alert-danger { background:#f8d7da; color:#721c24; border:1px solid #f5c6cb; }
+
+/* small responsive tweak */
+@media (max-width:600px) {
+  .form-row { grid-template-columns:1fr; }
+  .header-links { text-align:right; }
+}

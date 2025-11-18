@@ -3,53 +3,56 @@
 {% block title %}Dashboard - Royal Mart{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-  <div>
-    <h2>Inventory Dashboard</h2>
-    <small class="text-muted">Stock is automatically reduced after successful checkout</small>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+  <div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <div>
+        <h2>Inventory Dashboard</h2>
+        <small class="text-muted">Stock is automatically reduced after successful checkout</small>
+      </div>
+      <a class="btn btn-success" href="{{ url_for('inventory_new') }}">+ New Product</a>
+    </div>
+
+    <table class="table table-striped mt-3">
+      <thead>
+        <tr>
+          <th>ProductCode</th>
+          <th>Name</th>
+          <th>Price</th>
+          <th>Current Stock</th>
+          <th>Add Stock</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+          <tr>
+            <td><strong>{{ item.sku }}</strong></td>
+            <td>{{ item.name }}</td>
+            <td>${{ '%.2f'|format(item.unit_price) }}</td>
+            <td>
+              <span class="badge {% if stocks[item.id] <= 0 %}bg-danger{% elif stocks[item.id] <= 5 %}bg-warning{% else %}bg-success{% endif %}">
+                {{ stocks[item.id] }} units
+              </span>
+            </td>
+            <td>
+              <form method="post" action="{{ url_for('add_stock', item_id=item.id) }}" class="d-flex gap-2">
+                <input name="quantity" type="number" min="1" class="form-control" placeholder="Qty" required>
+                <input name="reason" class="form-control" placeholder="Reason (optional)">
+                <button type="submit" class="btn btn-secondary">Add</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="mt-4 alert alert-info">
+      <h5>How Stock Works:</h5>
+      <ul class="mb-0">
+        <li><strong>Cash Payment:</strong> Stock is automatically reduced when invoice is generated after checkout</li>
+        <li><strong>Add Stock:</strong> Use the form above to manually add stock when you receive new inventory</li>
+        <li><strong>Stock Status:</strong> Red = Out of stock, Yellow = Low stock (≤5), Green = Good stock</li>
+      </ul>
+    </div>
   </div>
-  <a class="btn btn-success" href="{{ url_for('inventory_new') }}">+ New Product</a>
-</div>
-
-<table class="table table-striped mt-3">
-  <thead>
-    <tr>
-      <th>ProductCode</th>
-      <th>Name</th>
-      <th>Price</th>
-      <th>Current Stock</th>
-      <th>Add Stock</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for item in items %}
-      <tr>
-        <td><strong>{{ item.sku }}</strong></td>
-        <td>{{ item.name }}</td>
-        <td>${{ '%.2f'|format(item.unit_price) }}</td>
-        <td>
-          <span class="badge {% if stocks[item.id] <= 0 %}bg-danger{% elif stocks[item.id] <= 5 %}bg-warning{% else %}bg-success{% endif %}">
-            {{ stocks[item.id] }} units
-          </span>
-        </td>
-        <td>
-          <form method="post" action="{{ url_for('add_stock', item_id=item.id) }}" class="d-flex gap-2">
-            <input name="quantity" type="number" min="1" class="form-control" placeholder="Qty" required>
-            <input name="reason" class="form-control" placeholder="Reason (optional)">
-            <button type="submit" class="btn btn-secondary">Add</button>
-          </form>
-        </td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
-
-<div class="mt-4 alert alert-info">
-  <h5>How Stock Works:</h5>
-  <ul class="mb-0">
-    <li><strong>Cash Payment:</strong> Stock is automatically reduced when invoice is generated after checkout</li>
-    <li><strong>Add Stock:</strong> Use the form above to manually add stock when you receive new inventory</li>
-    <li><strong>Stock Status:</strong> Red = Out of stock, Yellow = Low stock (≤5), Green = Good stock</li>
-  </ul>
-</div>
 {% endblock %}

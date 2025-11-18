@@ -1,24 +1,36 @@
 {% extends "base.html" %}{% block content %}
-<div class="mb-3 d-flex justify-content-between">
-  <a href="/checkout" class="btn btn-secondary">Back to Checkout</a>
-  <a href="/orders" class="btn btn-secondary">Back to Orders</a>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+
+<div class="header-row" style="display:flex; justify-content:space-between; align-items:flex-start; gap:20px; margin-bottom:24px;">
+  <div class="company-left" style="text-align:left; line-height:1.2;">
+    <strong>A Square General Trading Pte Ltd</strong><br>
+    997, Serangoon Road, #01-00A<br>
+    Singapore - 328152
+  </div>
+  <div style="min-width:200px; text-align:right;">
+    <!-- keep any existing right-side content (if needed) -->
+  </div>
 </div>
 
 <div class="d-flex justify-content-between">
-  <h3>Invoice {{ invoice.invoice_number }}</h3>
-  <button onclick="window.print()" class="btn btn-outline-secondary">Print / Save as PDF</button>
+  <h3>Online Invoice {{ invoice.invoice_number }}</h3>
+  <img src="{{ url_for('static', filename='print.png') }}"
+       alt="Print"
+       title="Print / Save as PDF"
+       style="cursor:pointer; width:28px; height:28px;"
+       onclick="window.print()">
 </div>
 <div class="mb-3">
   <strong>Customer:</strong> {{ user.name or 'N/A' }}<br>
   <strong>Mobile:</strong> {{ user.mobile }}<br>
-  <strong>Date:</strong> {{ invoice.created_at }}
+  <strong>Date:</strong> {{ invoice.created_at }}<br>
+  <strong>Payment Mode:</strong> {{ invoice.payment_mode or invoice.payment or 'N/A' }}
 </div>
 <table class="table table-striped">
-  <thead><tr><th>SKU</th><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead>
+  <thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead>
   <tbody>
     {% for li in lines %}
     <tr>
-      <td>{{ li.sku }}</td>
       <td>{{ li.name }}</td>
       <td>{{ li.quantity }}</td>
       <td>${{ '%.2f'|format(li.unit_price) }}</td>
@@ -27,9 +39,9 @@
     {% endfor %}
   </tbody>
   <tfoot>
-    <tr><th colspan="4" class="text-end">Subtotal</th><th>${{ '%.2f'|format(invoice.subtotal) }}</th></tr>
-    <tr><th colspan="4" class="text-end">Tax</th><th>${{ '%.2f'|format(invoice.tax) }}</th></tr>
-    <tr><th colspan="4" class="text-end">Total</th><th>${{ '%.2f'|format(invoice.total) }}</th></tr>
+    <tr><th colspan="3" class="text-end">Subtotal</th><th>${{ '%.2f'|format(invoice.subtotal) }}</th></tr>
+    <tr><th colspan="3" class="text-end">Tax</th><th>${{ '%.2f'|format(invoice.tax) }}</th></tr>
+    <tr><th colspan="3" class="text-end">Total</th><th>${{ '%.2f'|format(invoice.total) }}</th></tr>
   </tfoot>
 </table>
 {% endblock %}

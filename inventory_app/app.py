@@ -20,7 +20,8 @@ try:
   print("✓ Database initialized successfully!")
 except Exception as e:
   print(f"✗ Database initialization error: {e}")
-  sys.exit(1)
+  # don't exit in production; keep app running so we can inspect logs
+  # sys.exit(1)
 
 # -------- Helpers --------
 def require_admin():
@@ -109,7 +110,7 @@ def inventory_new():
       flash("Item created.")
       return redirect(url_for("dashboard"))
     except Exception:
-      flash("SKU must be unique.")
+      flash("ProductCode must be unique.")
   return render_template("inventory_new.html")
 
 @app.route("/inventory/<int:item_id>/add_stock", methods=["POST"])
@@ -144,6 +145,8 @@ def checkout():
     mobile = request.form["mobile"].strip()
     name = request.form.get("name", "").strip()
     tax_rate = float(request.form.get("tax_rate", "0"))
+    # read payment mode from form (default Cash)
+    payment_mode = request.form.get("payment_mode", "Cash")
     
     cart = session.get("checkout_cart", [])
     if not cart:
@@ -173,10 +176,19 @@ def checkout():
     total = round(subtotal + tax, 2)
     invoice_number = f"INV-{uuid.uuid4().hex[:10].upper()}"
     
+    # ensure invoices table has payment_mode column (safe for SQLite)
+    try:
+      cols = [r["name"] for r in conn.execute("PRAGMA table_info(invoices)").fetchall()]
+      if "payment_mode" not in cols:
+        conn.execute("ALTER TABLE invoices ADD COLUMN payment_mode TEXT")
+        conn.commit()
+    except Exception:
+      # if this fails, continue — insertion below may still work if DB supports the column already
+      pass
     # Create invoice with admin_id
     conn.execute(
-      "INSERT INTO invoices (invoice_number, user_id, subtotal, tax, total, admin_id) VALUES (?, ?, ?, ?, ?, ?)",
-      (invoice_number, user["id"], subtotal, tax, total, admin_id)
+      "INSERT INTO invoices (invoice_number, user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      (invoice_number, user["id"], subtotal, tax, total, admin_id, payment_mode)
     )
     conn.commit()
     invoice = conn.execute("SELECT * FROM invoices WHERE invoice_number=?", (invoice_number,)).fetchone()
@@ -184,6 +196,7 @@ def checkout():
     print(f"\n--- Invoice Created ---")
     print(f"Invoice: {invoice_number}")
     print(f"Customer: {user['mobile']} ({user['name']})")
+    print(f"Payment Mode: {payment_mode}")
     
     # Add invoice items and update stock
     for cart_item in cart:

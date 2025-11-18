@@ -1,100 +1,15 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Checkout</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; background: #f5f5f5; }
-    .container { max-width: 900px; margin: 20px auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    
-    .back-link { display: inline-block; margin-bottom: 20px; padding: 8px 15px; background: #6c757d; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; }
-    .back-link:hover { background: #5a6268; }
-    
-    h1 { margin-bottom: 20px; color: #333; }
-    
-    .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #ddd; }
-    .section:last-child { border-bottom: none; }
-    .section h2 { font-size: 18px; margin-bottom: 15px; color: #555; }
-    
-    .search-wrapper { position: relative; margin-bottom: 15px; }
-    .search-box { display: flex; gap: 10px; }
-    .search-box input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
-    
-    .search-hint { font-size: 12px; color: #999; margin-bottom: 8px; }
-    
-    #search-results { 
-      list-style: none; 
-      position: absolute;
-      top: 100%;
-      left: 0;
-      right: 0;
-      max-height: 400px; 
-      overflow-y: auto; 
-      border: 1px solid #ddd; 
-      border-radius: 4px;
-      background: white;
-      z-index: 1000;
-      display: none;
-      margin-top: 2px;
-      box-shadow: 0 4px 6px rgba(0,0,0,0.15);
-    }
-    
-    #search-results.show { display: block; }
-    
-    #search-results li { 
-      padding: 12px 15px; 
-      border-bottom: 1px solid #eee; 
-      cursor: pointer; 
-      display: flex; 
-      justify-content: space-between; 
-      align-items: center;
-      transition: background 0.2s;
-    }
-    #search-results li:hover { background: #f0f7ff; }
-    #search-results li:last-child { border-bottom: none; }
-    
-    .item-info { flex: 1; }
-    .item-name { font-weight: bold; color: #333; font-size: 14px; }
-    .item-sku { font-size: 12px; color: #666; margin-top: 2px; }
-    .item-stock { font-size: 12px; color: #999; margin-top: 2px; }
-    
-    .item-actions { display: flex; gap: 10px; align-items: center; }
-    .item-price { font-weight: bold; color: #007bff; min-width: 80px; text-align: right; }
-    .qty-input { width: 50px; padding: 5px; border: 1px solid #ddd; border-radius: 3px; text-align: center; }
-    .add-btn { padding: 6px 12px; background: #28a745; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; white-space: nowrap; }
-    .add-btn:hover { background: #218838; }
-    .add-btn:disabled { background: #ccc; cursor: not-allowed; }
-    
-    .cart-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
-    .cart-table th { background: #f0f0f0; padding: 10px; text-align: left; font-weight: bold; border-bottom: 2px solid #ddd; }
-    .cart-table td { padding: 10px; border-bottom: 1px solid #ddd; }
-    .cart-table .remove-btn { padding: 5px 10px; background: #dc3545; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; }
-    .cart-table .remove-btn:hover { background: #c82333; }
-    
-    .cart-empty { text-align: center; padding: 20px; color: #999; }
-    
-    .totals { text-align: right; padding: 15px 0; font-size: 16px; }
-    .totals div { margin-bottom: 10px; }
-    .subtotal { color: #666; }
-    
-    .form-group { margin-bottom: 15px; }
-    .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: #333; }
-    .form-group input, .form-group select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
-    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-    
-    .submit-btn { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; font-weight: bold; cursor: pointer; }
-    .submit-btn:hover { background: #0056b3; }
-    .submit-btn:disabled { background: #ccc; cursor: not-allowed; }
-    
-    .alert { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
-    .alert-danger { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-  </style>
-</head>
-<body>
+{% extends "base.html" %}
+{% block content %}
+  <!-- add shared stylesheet for consistent fonts/styles -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+
   <div class="container">
-    <a href="/" class="back-link">← Back to Dashboard</a>
-    <h1>Checkout</h1>
-    
+    <!-- header consistent with dashboard / inventory_new -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h2 class="mb-0">Checkout</h2>
+     
+    </div>
+
     {% with messages = get_flashed_messages() %}
       {% if messages %}
         {% for message in messages %}
@@ -166,6 +81,18 @@
               <input type="text" id="name" name="name" placeholder="Optional">
             </div>
           </div>
+
+          <!-- Payment Mode select (added) -->
+          <div class="form-group">
+            <label for="payment_mode">Payment Mode</label>
+            <select id="payment_mode" name="payment_mode">
+              <option value="Online">Online</option>
+              <option value="Nets">Nets</option>
+              <option value="Cash" selected>Cash</option>
+              <option value="QR">QR</option>
+            </select>
+          </div>
+
           <div class="form-group">
             <label for="tax_rate">Tax Rate (%)</label>
             <input type="number" id="tax_rate" name="tax_rate" value="0" min="0" max="100" step="0.01">
@@ -310,16 +237,11 @@
     document.getElementById('search-input').addEventListener('input', (e) => {
       clearTimeout(searchTimeout);
       const query = e.target.value.trim();
-      console.log('Input event, query length:', query.length);
-      
       if (query.length < 3) {
         document.getElementById('search-results').classList.remove('show');
         return;
       }
-      
-      searchTimeout = setTimeout(() => {
-        performSearch(query);
-      }, 300);
+      searchTimeout = setTimeout(() => performSearch(query), 300);
     });
     
     // Close dropdown when clicking outside
@@ -329,5 +251,4 @@
       }
     });
   </script>
-</body>
-</html>
+{% endblock %}
