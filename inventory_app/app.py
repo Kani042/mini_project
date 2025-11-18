@@ -31,7 +31,7 @@ def require_admin():
   return True
 
 def current_stock(conn, item_id):
-  cur = conn.execute("SELECT COALESCE(SUM(delta_quantity),0) AS qty FROM inventory_stock WHERE item_id=?", (item_id,))
+  cur = conn.execute("SELECT COALESCE(SUM(delta_quantity),0) AS qty FROM inventory_stock WHERE item_id=%s", (item_id,))
   return cur.fetchone()["qty"]
 
 # -------- Auth --------
@@ -46,7 +46,7 @@ def register():
       return redirect(url_for("register"))
     pw_hash = pbkdf2_sha256.hash(password)
     try:
-      conn.execute("INSERT INTO admins (email, password_hash) VALUES (?, ?)", (email, pw_hash))
+      conn.execute("INSERT INTO admins (email, password_hash) VALUES (%s, %s)", (email, pw_hash))
       conn.commit()
       flash("Admin registered. Please log in.")
       return redirect(url_for("login"))
@@ -60,12 +60,19 @@ def login():
   if request.method == "POST":
     email = request.form["email"].lower().strip()
     password = request.form["password"]
-    admin = conn.execute("SELECT * FROM admins WHERE email=?", (email,)).fetchone()
-    if admin and pbkdf2_sha256.verify(password, admin["password_hash"]):
+    print(f"Login attempt for email: {email}")
+    admin = conn.execute("SELECT * FROM admins WHERE email=%s", (email,)).fetchone()
+    if not admin:
+      print(f"No admin found with email: {email}")
+      flash("Invalid credentials.")
+    elif pbkdf2_sha256.verify(password, admin["password_hash"]):
+      print(f"Login successful for: {email}")
       session["admin_id"] = admin["id"]
       session["admin_email"] = admin["email"]
       return redirect(url_for("dashboard"))
-    flash("Invalid credentials.")
+    else:
+      print(f"Password verification failed for: {email}")
+      flash("Invalid credentials.")
   return render_template("login.html")
 
 @app.route("/logout")
@@ -81,7 +88,7 @@ def dashboard():
     return redirect(url_for("login"))
   conn = get_db()
   admin_id = session.get("admin_id")
-  items = conn.execute("SELECT * FROM inventory_items WHERE admin_id=? ORDER BY created_at DESC", (admin_id,)).fetchall()
+  items = conn.execute("SELECT * FROM inventory_items WHERE admin_id=%s ORDER BY created_at DESC", (admin_id,)).fetchall()
   stocks = {item["id"]: current_stock(conn, item["id"]) for item in items}
   return render_template("dashboard.html", items=items, stocks=stocks)
 
@@ -103,7 +110,7 @@ def inventory_new():
       return redirect(url_for("inventory_new"))
     try:
       conn.execute(
-        "INSERT INTO inventory_items (sku, name, description, unit_price, admin_id) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO inventory_items (sku, name, description, unit_price, admin_id) VALUES (%s, %s, %s, %s, %s)",
         (sku, name, description, unit_price, admin_id)
       )
       conn.commit()
@@ -121,14 +128,14 @@ def add_stock(item_id):
   admin_id = session.get("admin_id")
   
   # Verify item belongs to this admin
-  item = conn.execute("SELECT * FROM inventory_items WHERE id=? AND admin_id=?", (item_id, admin_id)).fetchone()
+  item = conn.execute("SELECT * FROM inventory_items WHERE id=%s AND admin_id=%s", (item_id, admin_id)).fetchone()
   if not item:
     flash("Item not found or access denied.")
     return redirect(url_for("dashboard"))
   
   qty = int(request.form["quantity"])
   reason = request.form.get("reason", "Add stock")
-  conn.execute("INSERT INTO inventory_stock (item_id, delta_quantity, reason) VALUES (?, ?, ?)",
+  conn.execute("INSERT INTO inventory_stock (item_id, delta_quantity, reason) VALUES (%s, %s, %s)",
                (item_id, qty, reason))
   conn.commit()
   flash("Stock updated.")
@@ -139,100 +146,110 @@ def add_stock(item_id):
 def checkout():
   if not require_admin():
     return redirect(url_for("login"))
-  
+
   if request.method == "POST":
-    # Customer details submission
-    mobile = request.form["mobile"].strip()
-    name = request.form.get("name", "").strip()
-    tax_rate = float(request.form.get("tax_rate", "0"))
-    # read payment mode from form (default Cash)
-    payment_mode = request.form.get("payment_mode", "Cash")
-    
-    cart = session.get("checkout_cart", [])
-    if not cart:
-      flash("No items in cart.")
-      return redirect(url_for("checkout"))
-    
-    conn = get_db()
-    admin_id = session.get("admin_id")
-    
-    # Validate stock before creating invoice
-    for cart_item in cart:
-      available = current_stock(conn, cart_item["item_id"])
-      if cart_item["qty"] > available:
-        flash(f"Not enough stock for {cart_item['name']}. Available: {available}.")
-        return redirect(url_for("checkout"))
-    
-    # Get or create user
-    user = conn.execute("SELECT * FROM users WHERE mobile=?", (mobile,)).fetchone()
-    if not user:
-      conn.execute("INSERT INTO users (mobile, name) VALUES (?, ?)", (mobile, name))
-      conn.commit()
-      user = conn.execute("SELECT * FROM users WHERE mobile=?", (mobile,)).fetchone()
-    
-    # Calculate totals
-    subtotal = sum(item["unit_price"] * item["qty"] for item in cart)
-    tax = round(subtotal * tax_rate, 2)
-    total = round(subtotal + tax, 2)
-    invoice_number = f"INV-{uuid.uuid4().hex[:10].upper()}"
-    
-    # ensure invoices table has payment_mode column (safe for SQLite)
+    conn = get_db()               # single DBConnection for this request
     try:
-      cols = [r["name"] for r in conn.execute("PRAGMA table_info(invoices)").fetchall()]
-      if "payment_mode" not in cols:
-        conn.execute("ALTER TABLE invoices ADD COLUMN payment_mode TEXT")
-        conn.commit()
-    except Exception:
-      # if this fails, continue — insertion below may still work if DB supports the column already
-      pass
-    # Create invoice with admin_id
-    conn.execute(
-      "INSERT INTO invoices (invoice_number, user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      (invoice_number, user["id"], subtotal, tax, total, admin_id, payment_mode)
-    )
-    conn.commit()
-    invoice = conn.execute("SELECT * FROM invoices WHERE invoice_number=?", (invoice_number,)).fetchone()
-    
-    print(f"\n--- Invoice Created ---")
-    print(f"Invoice: {invoice_number}")
-    print(f"Customer: {user['mobile']} ({user['name']})")
-    print(f"Payment Mode: {payment_mode}")
-    
-    # Add invoice items and update stock
-    for cart_item in cart:
-      item_id = cart_item["item_id"]
-      qty = cart_item["qty"]
-      unit_price = cart_item["unit_price"]
-      line_total = round(unit_price * qty, 2)
-      
-      # Get current stock before reduction
-      stock_before = current_stock(conn, item_id)
-      
-      # Add invoice item
+      # Customer details submission
+      mobile = request.form["mobile"].strip()
+      name = request.form.get("name", "").strip()
+      tax_rate = float(request.form.get("tax_rate", "0"))
+      payment_mode = request.form.get("payment_mode", "Cash")
+
+      cart = session.get("checkout_cart", [])
+      if not cart:
+        flash("No items in cart.")
+        return redirect(url_for("checkout"))
+
+      admin_id = session.get("admin_id")
+
+      # Validate stock (reads use same conn)
+      for cart_item in cart:
+        available_row = current_stock(conn, cart_item["item_id"])
+        # current_stock returns a number (ensure consistent)
+        if isinstance(available_row, dict) and "qty" in available_row:
+          available = available_row["qty"]
+        else:
+          available = available_row
+        if cart_item["qty"] > available:
+          flash(f"Not enough stock for {cart_item['name']}. Available: {available}.")
+          return redirect(url_for("checkout"))
+
+      # Get or create user
+      user = conn.execute("SELECT * FROM users WHERE mobile=%s", (mobile,)).fetchone()
+      if not user:
+        conn.execute("INSERT INTO users (mobile, name) VALUES (%s, %s)", (mobile, name))
+        # do not commit yet — delay until entire transaction is successful
+        user = conn.execute("SELECT * FROM users WHERE mobile=%s", (mobile,)).fetchone()
+
+      # Calculate totals
+      subtotal = sum(item["unit_price"] * item["qty"] for item in cart)
+      tax = round(subtotal * tax_rate, 2)
+      total = round(subtotal + tax, 2)
+      invoice_number = f"INV-{uuid.uuid4().hex[:10].upper()}"
+
+      # Ensure payment_mode column exists (safe, idempotent)
+      try:
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(invoices)").fetchall()] if conn.driver == "sqlite" else \
+               [r["column_name"] for r in conn.execute(
+                 "SELECT column_name FROM information_schema.columns WHERE table_name='invoices'").fetchall()]
+        if "payment_mode" not in cols:
+          try:
+            conn.execute("ALTER TABLE invoices ADD COLUMN payment_mode TEXT")
+          except Exception:
+            # ignore if DB refuses (concurrency or Postgres restrictions) — we'll fail later with clear error
+            pass
+      except Exception:
+        # best-effort; continue
+        pass
+
+      # Create invoice (do not commit yet)
       conn.execute(
-        "INSERT INTO invoice_items (invoice_id, item_id, quantity, unit_price, line_total) VALUES (?, ?, ?, ?, ?)",
-        (invoice["id"], item_id, qty, unit_price, line_total)
+        "INSERT INTO invoices (invoice_number, user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (invoice_number, user["id"], subtotal, tax, total, admin_id, payment_mode)
       )
-      
-      # Reduce stock by adding negative delta
-      conn.execute(
-        "INSERT INTO inventory_stock (item_id, delta_quantity, reason) VALUES (?, ?, ?)",
-        (item_id, -qty, f"Sold - {invoice_number}")
-      )
+      invoice = conn.execute("SELECT * FROM invoices WHERE invoice_number=%s", (invoice_number,)).fetchone()
+
+      # Add invoice items and update stock (all on same conn)
+      for cart_item in cart:
+        item_id = cart_item["item_id"]
+        qty = cart_item["qty"]
+        unit_price = cart_item["unit_price"]
+        line_total = round(unit_price * qty, 2)
+
+        # Get current stock before reduction
+        stock_before_row = conn.execute("SELECT COALESCE(SUM(delta_quantity),0) AS qty FROM inventory_stock WHERE item_id=%s", (item_id,)).fetchone()
+        stock_before = stock_before_row.get("qty") if isinstance(stock_before_row, dict) else (stock_before_row["qty"] if stock_before_row else 0)
+
+        # Add invoice item
+        conn.execute(
+          "INSERT INTO invoice_items (invoice_id, item_id, quantity, unit_price, line_total) VALUES (%s, %s, %s, %s, %s)",
+          (invoice["id"], item_id, qty, unit_price, line_total)
+        )
+
+        # Reduce stock by adding negative delta
+        conn.execute(
+          "INSERT INTO inventory_stock (item_id, delta_quantity, reason) VALUES (%s, %s, %s)",
+          (item_id, -qty, f"Sold - {invoice_number}")
+        )
+
+      # All operations succeeded — commit once
       conn.commit()
-      
-      # Get stock after reduction
-      stock_after = current_stock(conn, item_id)
-      
-      print(f"  • {cart_item['name']}: {stock_before} → {stock_after} (sold {qty})")
-    
-    print(f"✓ Invoice completed. Total: ₹{total}\n")
-    
-    # Clear cart from session
-    session.pop("checkout_cart", None)
-    
-    return redirect(url_for("invoice_view", invoice_id=invoice["id"]))
-  
+
+      # Clear cart from session
+      session.pop("checkout_cart", None)
+      return redirect(url_for("invoice_view", invoice_id=invoice["id"]))
+    except Exception as e:
+      # rollback and log original exception for debugging
+      try:
+        conn.rollback()
+      except Exception:
+        pass
+      import traceback, sys
+      traceback.print_exc(file=sys.stderr)
+      flash("An error occurred while generating the invoice. Check server logs.")
+      return redirect(url_for("checkout"))
+  	
   # GET request - show cart
   cart = session.get("checkout_cart", [])
   subtotal = sum(item["unit_price"] * item["qty"] for item in cart)
@@ -260,7 +277,7 @@ def checkout_search():
   try:
     # First check if admin has any items
     admin_items_count = conn.execute(
-      "SELECT COUNT(*) as cnt FROM inventory_items WHERE admin_id=?", 
+      "SELECT COUNT(*) as cnt FROM inventory_items WHERE admin_id=%s", 
       (admin_id,)
     ).fetchone()["cnt"]
     print(f"Admin has {admin_items_count} total items")
@@ -269,7 +286,7 @@ def checkout_search():
     items = conn.execute("""
       SELECT id, sku, name, unit_price 
       FROM inventory_items 
-      WHERE admin_id=? AND (sku LIKE ? OR name LIKE ?)
+      WHERE admin_id=%s AND (sku LIKE %s OR name LIKE %s)
       ORDER BY name
     """, (admin_id, f"%{query}%", f"%{query}%")).fetchall()
     
@@ -310,7 +327,7 @@ def add_to_cart():
   
   conn = get_db()
   # Verify item belongs to this admin
-  item = conn.execute("SELECT * FROM inventory_items WHERE id=? AND admin_id=?", (item_id, admin_id)).fetchone()
+  item = conn.execute("SELECT * FROM inventory_items WHERE id=%s AND admin_id=%s", (item_id, admin_id)).fetchone()
   
   if not item:
     return jsonify({"error": "Item not found"}), 404
@@ -358,17 +375,17 @@ def invoice_view(invoice_id):
   admin_id = session.get("admin_id")
   
   # Verify invoice belongs to this admin
-  inv = conn.execute("SELECT * FROM invoices WHERE id=? AND admin_id=?", (invoice_id, admin_id)).fetchone()
+  inv = conn.execute("SELECT * FROM invoices WHERE id=%s AND admin_id=%s", (invoice_id, admin_id)).fetchone()
   if not inv:
     flash("Invoice not found or access denied.")
     return redirect(url_for("dashboard"))
   
-  user = conn.execute("SELECT * FROM users WHERE id=?", (inv["user_id"],)).fetchone()
+  user = conn.execute("SELECT * FROM users WHERE id=%s", (inv["user_id"],)).fetchone()
   lines = conn.execute("""
     SELECT ii.*, it.name, it.sku
     FROM invoice_items ii
     JOIN inventory_items it ON it.id = ii.item_id
-    WHERE ii.invoice_id=?
+    WHERE ii.invoice_id=%s
   """, (invoice_id,)).fetchall()
   return render_template("invoice.html", invoice=inv, user=user, lines=lines)
 
@@ -385,7 +402,7 @@ def orders_list():
     SELECT i.*, u.mobile, u.name as customer_name
     FROM invoices i
     JOIN users u ON u.id = i.user_id
-    WHERE i.admin_id = ?
+    WHERE i.admin_id = %s
     ORDER BY i.created_at DESC
   """, (admin_id,)).fetchall()
   
