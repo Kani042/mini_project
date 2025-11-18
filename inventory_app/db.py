@@ -12,35 +12,23 @@ except Exception:
 BASEDIR = Path(__file__).resolve().parent
 DEFAULT_SQLITE_PATH = BASEDIR / "local.db"
 
-# Determine driver from env
 _db_url = os.environ.get("DATABASE_URL")
-if _db_url:
-    # normalize prefix if needed
-    if _db_url.startswith("postgres://"):
-        _db_url = _db_url.replace("postgres://", "postgresql://", 1)
-    DRIVER = "pg"
+if _db_url and _db_url.startswith("postgres://"):
+    _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+
+DRIVER = "pg" if _db_url else "sqlite"
+if DRIVER == "sqlite":
+    _sqlite_path = DEFAULT_SQLITE_PATH
 else:
-    DRIVER = "sqlite"
-    _db_url = str(DEFAULT_SQLITE_PATH)
+    # keep DSN for per-connection use
+    _pg_dsn = _db_url
 
-# Connections (singletons)
+# initialize sqlite singleton connection only
 _sqlite_conn = None
-_pg_conn = None
-
-def _ensure_connections():
-    global _sqlite_conn, _pg_conn
-    if DRIVER == "sqlite":
-        if _sqlite_conn is None:
-            DEFAULT_SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _sqlite_conn = sqlite3.connect(str(DEFAULT_SQLITE_PATH), check_same_thread=False)
-            _sqlite_conn.row_factory = sqlite3.Row
-    else:
-        if psycopg2 is None:
-            raise RuntimeError("psycopg2-binary is required for PostgreSQL. Install it in requirements.")
-        if _pg_conn is None:
-            _pg_conn = psycopg2.connect(_db_url)
-
-_ensure_connections()
+if DRIVER == "sqlite":
+    _sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    _sqlite_conn = sqlite3.connect(str(_sqlite_path), check_same_thread=False)
+    _sqlite_conn.row_factory = sqlite3.Row
 
 # Lightweight cursor/result wrapper to match .fetchone()/.fetchall() usage
 class CursorWrapper:
@@ -52,50 +40,110 @@ class CursorWrapper:
         row = self._cur.fetchone()
         if row is None:
             return None
-        if self.driver == "sqlite":
-            return dict(row)
         return dict(row)
 
     def fetchall(self):
         rows = self._cur.fetchall()
-        if self.driver == "sqlite":
-            return [dict(r) for r in rows]
         return [dict(r) for r in rows]
 
 # Connection-like object with execute() and commit()
 class DBConnection:
     def __init__(self):
         self.driver = DRIVER
-        self._conn = _sqlite_conn if DRIVER == "sqlite" else _pg_conn
+        if self.driver == "sqlite":
+            self._conn = _sqlite_conn
+        else:
+            if psycopg2 is None:
+                raise RuntimeError("psycopg2-binary is required for Postgres. Install it.")
+            # create a fresh connection for this DBConnection instance
+            # this prevents aborted transactions from leaking between requests
+            self._conn = psycopg2.connect(_pg_dsn)
 
     def execute(self, sql, params=()):
-        # sqlite uses ? placeholders, psycopg2 uses %s
+        # Normalize placeholders depending on backend
+        if self.driver == "sqlite":
+            # sqlite expects '?' placeholders; convert '%s' -> '?'
+            if "%s" in sql:
+                sql = sql.replace("%s", "?")
+        else:
+            # postgres (psycopg2) expects '%s' placeholders; convert '?' -> '%s'
+            if "?" in sql:
+                sql = sql.replace("?", "%s")
+
         if self.driver == "sqlite":
             cur = self._conn.cursor()
             cur.execute(sql, params)
             return CursorWrapper(cur, "sqlite")
         else:
             cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            if "?" in sql:
-                sql = sql.replace("?", "%s")
-            cur.execute(sql, params)
-            return CursorWrapper(cur, "pg")
-
-    def commit(self):
-        self._conn.commit()
+            try:
+                cur.execute(sql, params)
+                return CursorWrapper(cur, "pg")
+            except Exception:
+                # rollback & close to clear aborted transaction
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                raise
 
     def executemany(self, sql, seq):
+        # Normalize placeholders depending on backend
+        if self.driver == "sqlite":
+            if "%s" in sql:
+                sql = sql.replace("%s", "?")
+        else:
+            if "?" in sql:
+                sql = sql.replace("?", "%s")
+
         if self.driver == "sqlite":
             cur = self._conn.cursor()
             cur.executemany(sql, seq)
             return CursorWrapper(cur, "sqlite")
         else:
             cur = self._conn.cursor()
-            if "?" in sql:
-                sql = sql.replace("?", "%s")
-            cur.executemany(sql, seq)
-            return CursorWrapper(cur, "pg")
+            try:
+                cur.executemany(sql, seq)
+                return CursorWrapper(cur, "pg")
+            except Exception:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                raise
 
+    def commit(self):
+        try:
+            self._conn.commit()
+        finally:
+            # close Postgres connection after commit to avoid reusing an in-session connection
+            if self.driver != "sqlite":
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+
+    def rollback(self):
+        """Public rollback to clear current transaction and close connection (Postgres)."""
+        try:
+            self._conn.rollback()
+        except Exception:
+            pass
+        if self.driver != "sqlite":
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+
+# Public API
 def get_db():
     return DBConnection()
 
@@ -117,15 +165,25 @@ def init_db():
         # executescript supports multiple statements
         _sqlite_conn.executescript(sql)
     else:
-        cur = _pg_conn.cursor()
-        # psycopg2 can execute multi-statement if autocommit or split; do simple execute
+        # create a temporary connection for schema application
+        tmp_conn = psycopg2.connect(_pg_dsn)
+        cur = tmp_conn.cursor()
         try:
             cur.execute(sql)
+            tmp_conn.commit()
         except Exception:
-            # Try splitting statements (simple fallback)
+            # fallback: split statements and run one by one (best-effort)
             for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
                 try:
                     cur.execute(stmt)
                 except Exception:
                     pass
-        _pg_conn.commit()
+            try:
+                tmp_conn.commit()
+            except Exception:
+                pass
+        finally:
+            try:
+                tmp_conn.close()
+            except Exception:
+                pass
