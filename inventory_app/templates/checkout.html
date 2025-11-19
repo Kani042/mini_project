@@ -50,16 +50,16 @@
               <tr data-item-id="{{ item.item_id }}">
                 <td>{{ item.sku }}</td>
                 <td>{{ item.name }}</td>
-                <td>₹{{ "%.2f"|format(item.unit_price) }}</td>
+                <td>${{ "%.2f"|format(item.unit_price) }}</td>
                 <td>{{ item.qty }}</td>
-                <td>₹{{ "%.2f"|format(item.unit_price * item.qty) }}</td>
+                <td>${{ "%.2f"|format(item.unit_price * item.qty) }}</td>
                 <td><button class="remove-btn" onclick="removeFromCart({{ item.item_id }})">Remove</button></td>
               </tr>
             {% endfor %}
           </tbody>
         </table>
         <div class="totals">
-          <div class="subtotal">Subtotal: ₹{{ "%.2f"|format(subtotal) }}</div>
+          <div class="subtotal">Subtotal: ${{ "%.2f"|format(subtotal) }}</div>
         </div>
       {% else %}
         <div class="cart-empty">Cart is empty. Search and add products above.</div>
@@ -74,7 +74,7 @@
           <div class="form-row">
             <div class="form-group">
               <label for="mobile">Mobile Number *</label>
-              <input type="text" id="mobile" name="mobile" required pattern="[0-9]{10}" placeholder="10-digit mobile number">
+              <input type="text" id="mobile" name="mobile" required pattern="[0-9]{9}" placeholder="9-digit mobile number">
             </div>
             <div class="form-group">
               <label for="name">Customer Name</label>
@@ -152,7 +152,7 @@
                 <div class="item-stock">Stock: ${item.stock} available</div>
               </div>
               <div class="item-actions">
-                <div class="item-price">₹${item.unit_price.toFixed(2)}</div>
+                <div class="item-price">$${item.unit_price.toFixed(2)}</div>
                 <input type="number" class="qty-input" value="1" min="1" max="${Math.max(1, item.stock)}" ${isOutOfStock ? 'disabled' : ''}>
                 <button type="button" class="add-btn" onclick="addToCart(${item.id}, this)" ${isOutOfStock ? 'disabled' : ''}>
                   ${isOutOfStock ? 'Out of Stock' : 'Add'}

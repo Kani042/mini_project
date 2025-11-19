@@ -1,10 +1,15 @@
 import os, uuid, sys
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, make_response
 from passlib.hash import pbkdf2_sha256
 from dotenv import load_dotenv
 from .db import get_db, init_db
 
-load_dotenv()
+# Only load local .env when running in non-production and DATABASE_URL is not provided.
+if os.environ.get("FLASK_ENV", "").lower() != "production" and not os.environ.get("DATABASE_URL"):
+    load_dotenv()
+    print("Loaded .env for local development")
+else:
+    print("Running in production or DATABASE_URL present — skipping .env load")
 
 # Use module-relative absolute paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -108,6 +113,29 @@ def inventory_new():
     if not sku or not name:
       flash("SKU and name are required.")
       return redirect(url_for("inventory_new"))
+
+    # Normalize SKU for comparison (trim + lower) and check uniqueness for this admin
+    sku_norm = sku.strip().lower()
+    try:
+      # case-insensitive, trimmed comparison
+      exists = conn.execute(
+        "SELECT id, sku FROM inventory_items WHERE admin_id=%s AND LOWER(TRIM(sku)) = %s LIMIT 1",
+        (admin_id, sku_norm)
+      ).fetchone()
+    except Exception as e:
+      # log the DB error but continue to attempt insert (will be caught below)
+      print("inventory_new: uniqueness check failed:", e)
+      exists = None
+
+    if exists:
+      # helpful debug output for why duplication flagged
+      try:
+        print("inventory_new: duplicate SKU detected for admin_id=%s -> db row: %s" % (admin_id, dict(exists)))
+      except Exception:
+        print("inventory_new: duplicate SKU detected (could not stringify row).")
+      flash("ProductCode must be unique.")
+      return redirect(url_for("inventory_new"))
+    
     try:
       conn.execute(
         "INSERT INTO inventory_items (sku, name, description, unit_price, admin_id) VALUES (%s, %s, %s, %s, %s)",
@@ -117,6 +145,8 @@ def inventory_new():
       flash("Item created.")
       return redirect(url_for("dashboard"))
     except Exception:
+      import traceback, sys
+      traceback.print_exc(file=sys.stderr)
       flash("ProductCode must be unique.")
   return render_template("inventory_new.html")
 
@@ -407,6 +437,58 @@ def orders_list():
   """, (admin_id,)).fetchall()
   
   return render_template("orders.html", invoices=invoices)
+
+@app.route("/analytics", methods=["GET"])
+def analytics():
+	"""Show pivoted sales by payment mode and list orders for selected mode."""
+	if not require_admin():
+		return redirect(url_for("login"))
+	conn = get_db()
+	admin_id = session.get("admin_id")
+
+	# get available payment modes for this admin
+	modes_rows = conn.execute(
+		"SELECT DISTINCT COALESCE(NULLIF(payment_mode, ''), 'Unknown') AS payment_mode FROM invoices WHERE admin_id=%s ORDER BY payment_mode",
+		(admin_id,)
+	).fetchall()
+	payment_modes = [r["payment_mode"] for r in modes_rows] if modes_rows else []
+
+	# selected mode from query string; 'All' means no filter
+	selected = request.args.get("payment_mode", "All")
+
+	# Build invoice list query, filter by payment_mode if selected != All
+	params = [admin_id]
+	mode_filter = ""
+	if selected and selected != "All":
+		mode_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = %s"
+		params.append(selected)
+
+	# Query invoices with aggregated qty & amount per invoice
+	rows = conn.execute(f"""
+		SELECT
+			i.id,
+			i.invoice_number,
+			i.created_at,
+			COALESCE(u.name, '') AS customer_name,
+			COALESCE(SUM(ii.quantity),0) AS total_qty,
+			COALESCE(SUM(ii.line_total),0) AS total_amount,
+			COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') AS payment_mode
+		FROM invoices i
+		LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
+		LEFT JOIN users u ON u.id = i.user_id
+		WHERE i.admin_id=%s {mode_filter}
+		GROUP BY i.id, i.invoice_number, i.created_at, u.name, payment_mode
+		ORDER BY i.created_at DESC
+	""", tuple(params)).fetchall()
+
+	# Consolidated totals for the displayed rows
+	totals = {"orders": 0, "total_qty": 0, "total_amount": 0.0}
+	for r in rows:
+		totals["orders"] += 1
+		totals["total_qty"] += int(r["total_qty"] or 0)
+		totals["total_amount"] += float(r["total_amount"] or 0.0)
+
+	return render_template("analytics.html", payment_modes=payment_modes, selected=selected, rows=rows, totals=totals)
 
 if __name__ == "__main__":
   app.run(debug=True)

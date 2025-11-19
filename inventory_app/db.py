@@ -1,147 +1,157 @@
 import os
-import sqlite3
 from pathlib import Path
+from dotenv import load_dotenv
 
-# Try to import psycopg2 only when needed
+# Try to import psycopg2 and extras (required)
 try:
     import psycopg2
     import psycopg2.extras
 except Exception:
-    psycopg2 = None
+    raise RuntimeError("psycopg2-binary is required. Install it in your virtualenv (pip install psycopg2-binary).")
+
+load_dotenv()  # load .env from project root so DATABASE_URL/PG* vars are available at import time
 
 BASEDIR = Path(__file__).resolve().parent
-DEFAULT_SQLITE_PATH = BASEDIR / "local.db"
 
-_db_url = os.environ.get("DATABASE_URL")
-if _db_url and _db_url.startswith("postgres://"):
-    _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+# Read DATABASE_URL or assemble DSN from PG* env vars (host/db/user/password/port)
+_pg_dsn = os.environ.get("DATABASE_URL", "").strip()
 
-DRIVER = "pg" if _db_url else "sqlite"
-if DRIVER == "sqlite":
-    _sqlite_path = DEFAULT_SQLITE_PATH
-else:
-    # keep DSN for per-connection use
-    _pg_dsn = _db_url
+def _get_dsn():
+    """Build and return PostgreSQL DSN from env or raise if not configured.
+    Called lazily when a DB connection is created so import-time doesn't fail."""
+    dsn = os.environ.get("DATABASE_URL", "").strip()
+    if dsn:
+        if dsn.startswith("postgres://"):
+            dsn = dsn.replace("postgres://", "postgresql://", 1)
+        return dsn
+    # try individual vars
+    pg_host = os.environ.get("PGHOST") or os.environ.get("DB_HOST")
+    pg_db = os.environ.get("PGDATABASE") or os.environ.get("DB_NAME")
+    pg_user = os.environ.get("PGUSER") or os.environ.get("DB_USER")
+    pg_pass = os.environ.get("PGPASSWORD") or os.environ.get("DB_PASSWORD")
+    pg_port = os.environ.get("PGPORT") or os.environ.get("DB_PORT") or "5432"
+    if pg_host and pg_db and pg_user and pg_pass:
+        return f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+    raise RuntimeError(
+        "Postgres connection not configured. Set DATABASE_URL or PGHOST/PGDATABASE/PGUSER/PGPASSWORD (and optional PGPORT)."
+    )
 
-# initialize sqlite singleton connection only
-_sqlite_conn = None
-if DRIVER == "sqlite":
-    _sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-    _sqlite_conn = sqlite3.connect(str(_sqlite_path), check_same_thread=False)
-    _sqlite_conn.row_factory = sqlite3.Row
+# Compatibility wrapper: dict-like but also allow attribute access (row.id)
+class RowProxy(dict):
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
+    def __setattr__(self, name, value):
+        self[name] = value
+    def get(self, key, default=None):
+        return super().get(key, default)
 
-# Lightweight cursor/result wrapper to match .fetchone()/.fetchall() usage
+# Cursor/result wrapper returning RowProxy rows
 class CursorWrapper:
-    def __init__(self, cur, driver):
+    def __init__(self, cur):
         self._cur = cur
-        self.driver = driver
 
     def fetchone(self):
         row = self._cur.fetchone()
         if row is None:
             return None
-        return dict(row)
+        try:
+            data = dict(row)
+        except Exception:
+            data = {desc[0]: row[idx] for idx, desc in enumerate(self._cur.description)}
+        return RowProxy(data)
 
     def fetchall(self):
         rows = self._cur.fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            try:
+                data = dict(r)
+            except Exception:
+                data = {desc[0]: r[idx] for idx, desc in enumerate(self._cur.description)}
+            result.append(RowProxy(data))
+        return result
 
-# Connection-like object with execute() and commit()
+# Postgres-only connection wrapper
 class DBConnection:
     def __init__(self):
-        self.driver = DRIVER
-        if self.driver == "sqlite":
-            self._conn = _sqlite_conn
-        else:
-            if psycopg2 is None:
-                raise RuntimeError("psycopg2-binary is required for Postgres. Install it.")
-            # create a fresh connection for this DBConnection instance
-            # this prevents aborted transactions from leaking between requests
-            self._conn = psycopg2.connect(_pg_dsn)
+        self.driver = "pg"
+        try:
+            dsn = _pg_dsn
+            # if _pg_dsn empty, try to rebuild from env just in case
+            if not dsn:
+                from dotenv import load_dotenv as _ld; _ld()
+                dsn = os.environ.get("DATABASE_URL", "").strip()
+            if dsn.startswith("postgres://"):
+                dsn = dsn.replace("postgres://", "postgresql://", 1)
+            self._conn = psycopg2.connect(dsn)
+        except Exception as conn_err:
+            # provide a helpful message and re-raise
+            raise RuntimeError(
+                "Unable to connect to PostgreSQL. Check DATABASE_URL or PGHOST/PGDATABASE/PGUSER/PGPASSWORD. "
+                f"Original error: {conn_err}"
+            ) from conn_err
+
+    def _normalize_sql(self, sql: str) -> str:
+        # if code accidentally used sqlite-style '?' placeholders, convert them
+        if "?" in sql:
+            return sql.replace("?", "%s")
+        return sql
 
     def execute(self, sql, params=()):
-        # Normalize placeholders depending on backend
-        if self.driver == "sqlite":
-            # sqlite expects '?' placeholders; convert '%s' -> '?'
-            if "%s" in sql:
-                sql = sql.replace("%s", "?")
-        else:
-            # postgres (psycopg2) expects '%s' placeholders; convert '?' -> '%s'
-            if "?" in sql:
-                sql = sql.replace("?", "%s")
-
-        if self.driver == "sqlite":
-            cur = self._conn.cursor()
-            cur.execute(sql, params)
-            return CursorWrapper(cur, "sqlite")
-        else:
-            cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        sql = self._normalize_sql(sql)
+        cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cur.execute(sql, params or ())
+            return CursorWrapper(cur)
+        except Exception:
             try:
-                cur.execute(sql, params)
-                return CursorWrapper(cur, "pg")
+                self._conn.rollback()
             except Exception:
-                # rollback & close to clear aborted transaction
-                try:
-                    self._conn.rollback()
-                except Exception:
-                    pass
-                try:
-                    self._conn.close()
-                except Exception:
-                    pass
-                raise
+                pass
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            raise
 
     def executemany(self, sql, seq):
-        # Normalize placeholders depending on backend
-        if self.driver == "sqlite":
-            if "%s" in sql:
-                sql = sql.replace("%s", "?")
-        else:
-            if "?" in sql:
-                sql = sql.replace("?", "%s")
-
-        if self.driver == "sqlite":
-            cur = self._conn.cursor()
+        sql = self._normalize_sql(sql)
+        cur = self._conn.cursor()
+        try:
             cur.executemany(sql, seq)
-            return CursorWrapper(cur, "sqlite")
-        else:
-            cur = self._conn.cursor()
+            return CursorWrapper(cur)
+        except Exception:
             try:
-                cur.executemany(sql, seq)
-                return CursorWrapper(cur, "pg")
+                self._conn.rollback()
             except Exception:
-                try:
-                    self._conn.rollback()
-                except Exception:
-                    pass
-                try:
-                    self._conn.close()
-                except Exception:
-                    pass
-                raise
+                pass
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            raise
 
     def commit(self):
         try:
             self._conn.commit()
         finally:
-            # close Postgres connection after commit to avoid reusing an in-session connection
-            if self.driver != "sqlite":
-                try:
-                    self._conn.close()
-                except Exception:
-                    pass
-
-    def rollback(self):
-        """Public rollback to clear current transaction and close connection (Postgres)."""
-        try:
-            self._conn.rollback()
-        except Exception:
-            pass
-        if self.driver != "sqlite":
             try:
                 self._conn.close()
             except Exception:
                 pass
+
+    def rollback(self):
+        try:
+            self._conn.rollback()
+        except Exception:
+            pass
+        try:
+            self._conn.close()
+        except Exception:
+            pass
 
 # Public API
 def get_db():
@@ -161,12 +171,9 @@ def init_db():
         return
 
     sql = schema_path.read_text(encoding="utf-8")
-    if DRIVER == "sqlite":
-        # executescript supports multiple statements
-        _sqlite_conn.executescript(sql)
-    else:
-        # create a temporary connection for schema application
-        tmp_conn = psycopg2.connect(_pg_dsn)
+    tmp_conn = None
+    try:
+        tmp_conn = psycopg2.connect(_get_dsn())
         cur = tmp_conn.cursor()
         try:
             cur.execute(sql)
@@ -182,8 +189,29 @@ def init_db():
                 tmp_conn.commit()
             except Exception:
                 pass
-        finally:
+    finally:
+        if tmp_conn:
             try:
                 tmp_conn.close()
             except Exception:
                 pass
+
+def test_connection():
+    """Quick helper to test DB connectivity; returns True on success or raises on failure."""
+    dsn = os.environ.get("DATABASE_URL", "").strip()
+    if not dsn:
+        pg_host = os.environ.get("PGHOST") or os.environ.get("DB_HOST")
+        pg_db = os.environ.get("PGDATABASE") or os.environ.get("DB_NAME")
+        pg_user = os.environ.get("PGUSER") or os.environ.get("DB_USER")
+        pg_pass = os.environ.get("PGPASSWORD") or os.environ.get("DB_PASSWORD")
+        pg_port = os.environ.get("PGPORT") or os.environ.get("DB_PORT") or "5432"
+        if pg_host and pg_db and pg_user and pg_pass:
+            dsn = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+    if dsn.startswith("postgres://"):
+        dsn = dsn.replace("postgres://", "postgresql://", 1)
+    try:
+        conn = psycopg2.connect(dsn)
+        conn.close()
+        return True
+    except Exception as e:
+        raise RuntimeError(f"Postgres connectivity test failed: {e}") from e

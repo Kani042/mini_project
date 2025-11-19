@@ -31,30 +31,62 @@
   @media screen {
     .bill { box-shadow: none; }
   }
+
+  /* Header for bill: centered company name and address lines */
+  .bill-header {
+    text-align: center;
+    margin-bottom: 8px;
+  }
+  .bill-header .company-name {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+  .bill-header .company-address {
+    font-size: 11px;
+    line-height: 1.2;
+    color: #222;
+    white-space: pre-line; /* preserve line breaks if needed */
+  }
+
+  @media print {
+    .bill-header { margin-bottom: 6px; }
+  }
 </style>
 
 <div class="bill">
-  <div class="header-row" style="display:flex; justify-content:space-between; align-items:flex-start; gap:20px; margin-bottom:24px;">
-    <div class="company-left" style="text-align:left; line-height:1.2;">
-      <strong>A Square General Trading Pte Ltd</strong><br>
-      997, Serangoon Road, #01-00A<br>
+  <!-- replaced header -->
+  <div class="bill-header">
+    <div class="company-name">A Square General Trading Pte Ltd</div>
+    <div class="company-address">
+      997, Serangoon Road, #01-00A
       Singapore - 328152
-    </div>
-    <div style="min-width:200px; text-align:right;">
-      <!-- keep right-side content if needed -->
     </div>
   </div>
 
-  <div class="d-flex justify-content-between">
-    {% if invoice.id is defined %}
-      <h3>Online Invoice INV-{{ "%06d"|format(invoice.id) }}</h3>
-    {% else %}
-      <h3>Invoice {{ invoice.invoice_number }}</h3>
-    {% endif %}
+  <div class="d-flex justify-content-between align-items-center" style="margin-bottom:8px;">
+    <div style="font-size:12px; font-weight:600;">
+      {% if invoice.id is defined %}
+        Online Invoice INV-{{ "%06d"|format(invoice.id) }}
+      {% else %}
+        Online Invoice {{ invoice.invoice_number }}
+      {% endif %}
+      {% if invoice.created_at %}
+        <span style="font-size:11px; font-weight:400; color:#444; margin-left:8px;">
+          • {{ invoice.created_at.strftime('%Y-%m-%d') }}
+        </span>
+      {% endif %}
+      {% if invoice.payment_mode %}
+        <span style="font-size:11px; font-weight:400; color:#444; margin-left:8px;">
+          • {{ invoice.payment_mode }}
+        </span>
+      {% endif %}
+    </div>
     <img src="{{ url_for('static', filename='print.png') }}"
          alt="Print"
          title="Print / Save as PDF"
-         style="cursor:pointer; width:28px; height:28px;"
+         style="cursor:pointer; width:24px; height:24px;"
          onclick="window.print()"
          class="no-print">
   </div>
