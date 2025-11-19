@@ -36,9 +36,8 @@
                <td>{{ invoice.customer_name or "N/A" }}</td>
                <td>{{ invoice.mobile }}</td>
                <td>
-                 {% set item_count = 0 %}
-                 {# Count items logic #}
-                 <span class="badge bg-info">View Items</span>
+                 {# Link to dedicated order items page (shows purchased items only) #}
+                 <a href="{{ url_for('order_items', invoice_id=invoice.id) }}" class="badge bg-info text-decoration-none" title="View items for this invoice">View Items</a>
                </td>
                <td>${{ "%.2f"|format(invoice.subtotal) }}</td>
                <td>${{ "%.2f"|format(invoice.tax) }}</td>

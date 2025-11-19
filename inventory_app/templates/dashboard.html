@@ -13,38 +13,40 @@
       <a class="btn btn-success" href="{{ url_for('inventory_new') }}">+ New Product</a>
     </div>
 
-    <table class="table table-striped mt-3">
-      <thead>
-        <tr>
-          <th>ProductCode</th>
-          <th>Name</th>
-          <th>Price</th>
-          <th>Current Stock</th>
-          <th>Add Stock</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for item in items %}
+    <div class="table-responsive">
+      <table class="table table-striped mt-3">
+        <thead>
           <tr>
-            <td><strong>{{ item.sku }}</strong></td>
-            <td>{{ item.name }}</td>
-            <td>${{ '%.2f'|format(item.unit_price) }}</td>
-            <td>
-              <span class="badge {% if stocks[item.id] <= 0 %}bg-danger{% elif stocks[item.id] <= 5 %}bg-warning{% else %}bg-success{% endif %}">
-                {{ stocks[item.id] }} units
-              </span>
-            </td>
-            <td>
-              <form method="post" action="{{ url_for('add_stock', item_id=item.id) }}" class="d-flex gap-2">
-                <input name="quantity" type="number" min="1" class="form-control" placeholder="Qty" required>
-                <input name="reason" class="form-control" placeholder="Reason (optional)">
-                <button type="submit" class="btn btn-secondary">Add</button>
-              </form>
-            </td>
+            <th>ProductCode</th>
+            <th>Name</th>
+            <th>Price</th>
+            <th>Current Stock</th>
+            <th>Add Stock</th>
           </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for item in items %}
+            <tr>
+              <td><strong>{{ item.sku }}</strong></td>
+              <td>{{ item.name }}</td>
+              <td>${{ '%.2f'|format(item.unit_price) }}</td>
+              <td>
+                <span class="badge {% if stocks[item.id] <= 0 %}bg-danger{% elif stocks[item.id] <= 5 %}bg-warning{% else %}bg-success{% endif %}">
+                  {{ stocks[item.id] }} units
+                </span>
+              </td>
+              <td>
+                <form method="post" action="{{ url_for('add_stock', item_id=item.id) }}" class="d-flex gap-2">
+                  <input name="quantity" type="number" min="1" class="form-control" placeholder="Qty" required>
+                  <input name="reason" class="form-control" placeholder="Reason (optional)">
+                  <button type="submit" class="btn btn-secondary">Add</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
     <div class="mt-4 alert alert-info">
       <h5>How Stock Works:</h5>

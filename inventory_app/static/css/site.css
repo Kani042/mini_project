@@ -118,6 +118,59 @@ h1, h2 { color: #333; margin-bottom: 12px; }
 .alert { padding:10px; margin-bottom:15px; border-radius:4px; }
 .alert-danger { background:#f8d7da; color:#721c24; border:1px solid #f5c6cb; }
 
+/* Make table containers scrollable on small screens */
+.table-responsive {
+	width: 100%;
+	overflow-x: auto;
+	-webkit-overflow-scrolling: touch; /* smooth scrolling on iOS */
+}
+
+/* Ensure tables have a reasonable min width so columns remain readable,
+   and let the container provide horizontal scroll on narrow screens. */
+.table-responsive table,
+table {
+	width: 100%;
+	border-collapse: collapse;
+	min-width: 680px;
+}
+
+/* Cell layout and wrapping */
+.table-responsive th,
+.table-responsive td,
+table th,
+table td {
+	padding: 8px 10px;
+	vertical-align: middle;
+	word-break: break-word;
+	white-space: nowrap; /* keep cells compact on wide screens; allow override below */
+}
+
+/* Smaller screens: allow cells to wrap and reduce font-size */
+@media (max-width: 768px) {
+	.table-responsive table,
+	table {
+		min-width: 0;
+		font-size: 14px;
+	}
+	.table-responsive th,
+	.table-responsive td,
+	table th,
+	table td {
+		white-space: normal; /* allow wrapping on small screens */
+		padding: 6px 8px;
+	}
+	/* Make action buttons stack or fit better */
+	.d-flex.gap-2 { gap: 6px; }
+	.form-control { font-size: 14px; }
+}
+
+/* Improve touch target sizes for mobile */
+@media (max-width: 480px) {
+	.table-responsive th,
+	.table-responsive td { padding: 8px 6px; font-size: 13px; }
+	.btn { padding: 6px 8px; font-size: 13px; }
+}
+
 /* small responsive tweak */
 @media (max-width:600px) {
   .form-row { grid-template-columns:1fr; }

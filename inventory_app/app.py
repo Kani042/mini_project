@@ -438,6 +438,34 @@ def orders_list():
   
   return render_template("orders.html", invoices=invoices)
 
+@app.route("/orders/<int:invoice_id>/items")
+def order_items(invoice_id):
+    if not require_admin():
+        return redirect(url_for("login"))
+    conn = get_db()
+    admin_id = session.get("admin_id")
+
+    # Verify invoice belongs to this admin
+    inv = conn.execute("SELECT * FROM invoices WHERE id=%s AND admin_id=%s", (invoice_id, admin_id)).fetchone()
+    if not inv:
+        flash("Invoice not found or access denied.")
+        return redirect(url_for("orders_list"))
+
+    # Fetch invoice items with product details
+    lines = conn.execute("""
+      SELECT ii.*, it.name, it.sku
+      FROM invoice_items ii
+      JOIN inventory_items it ON it.id = ii.item_id
+      WHERE ii.invoice_id=%s
+      ORDER BY ii.id
+    """, (invoice_id,)).fetchall()
+
+    # Compute totals (defensive)
+    total_qty = sum(int(l.get("quantity", 0)) for l in lines)
+    total_amount = sum(float(l.get("line_total", 0) or 0) for l in lines)
+
+    return render_template("order_items.html", invoice=inv, lines=lines, total_qty=total_qty, total_amount=total_amount)
+
 @app.route("/analytics", methods=["GET"])
 def analytics():
 	"""Show pivoted sales by payment mode and list orders for selected mode."""
