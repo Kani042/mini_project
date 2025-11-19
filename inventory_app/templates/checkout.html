@@ -34,7 +34,7 @@
     <div class="section">
       <h2>2. Your Cart</h2>
       {% if cart %}
-        <div class="table-responsive">
+        <div class="table-responsive force-scroll">
         <table class="cart-table table table-striped">
           <thead>
             <tr>
@@ -220,7 +220,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item_id: itemId })
       })
-        .then(r => r.json())
+        .then r => r.json())
         .then(data => {
           if (data.success) {
             location.reload();
