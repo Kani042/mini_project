@@ -220,7 +220,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item_id: itemId })
       })
-        .then r => r.json())
+        .then(r => r.json())
         .then(data => {
           if (data.success) {
             location.reload();
