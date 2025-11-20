@@ -33,7 +33,13 @@
           <tbody>
             {% for invoice in invoices %}
               <tr>
-                <td><strong>{{ invoice.invoice_number }}</strong></td>
+                <td><strong>
+                  {% if invoice.invoice_number %}
+                    {{ invoice.invoice_number }}
+                  {% else %}
+                    INV-{{ "%06d"|format(invoice.id) }}
+                  {% endif %}
+                </strong></td>
                 <td>{{ invoice.customer_name or "N/A" }}</td>
                 <td>{{ invoice.mobile }}</td>
                 <td>

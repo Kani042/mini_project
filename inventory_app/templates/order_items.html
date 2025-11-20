@@ -6,7 +6,13 @@
 <div class="container">
   <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-      <h3>Items for {{ invoice.invoice_number }}</h3>
+      <h3>Items for
+        {% if invoice.invoice_number %}
+          {{ invoice.invoice_number }}
+        {% else %}
+          INV-{{ "%06d"|format(invoice.id) }}
+        {% endif %}
+      </h3>
       <small class="text-muted">Customer: {{ invoice.customer_name or 'N/A' }} — {{ invoice.created_at }}</small>
     </div>
     <div>

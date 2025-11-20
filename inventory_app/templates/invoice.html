@@ -3,31 +3,79 @@
 <style>
   /* Bill (receipt) print layout */
   .bill {
-    max-width: 78mm; /* typical 80mm receipt width minus margins */
+    max-width: 78mm; /* typical receipt width */
     margin: 0 auto;
-    font-family: "Helvetica Neue", Arial, sans-serif;
+    /* Use common system sans-serif for sharp printing */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     color: #000;
-    line-height: 1.15;
-    font-size: 12px;
+    line-height: 1.35;
+    font-size: 14px; /* larger base font for readability */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
-  .bill h3, .bill h4 { margin: 4px 0; font-weight:700; }
+  .bill h3, .bill h4 {
+    margin: 4px 0;
+    font-weight: 700;
+    font-size: 14.5px;
+  }
   .bill .invoice-details, .bill .customer-details, .bill .totals { margin: 6px 0; }
-  .bill table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  .bill table th, .bill table td { padding: 4px 2px; text-align: left; vertical-align: top; }
-  .bill table thead th { font-weight:700; font-size:11px; }
-  .bill .totals { text-align: right; font-weight:700; }
-  .no-print { display: inline-block; } /* visible on screen */
+  .bill table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .bill table th, .bill table td {
+    padding: 6px 4px;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid #222; /* stronger line for print */
+  }
+  .bill table thead th {
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .bill .totals {
+    text-align: right;
+    font-weight: 700;
+    margin-top: 6px;
+  }
+
+  /* Optimize images for print: use intrinsic size and high-quality rendering if available */
+  .bill img {
+    width: auto;
+    max-width: 96px;
+    height: auto;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
+    object-fit: contain;
+  }
+
   /* Print rules */
   @media print {
-    /* page size for small receipt-like prints; some browsers may ignore exact width */
-    @page { size: 80mm auto; margin: 5mm; }
+    /* page setup: avoid browser auto-scaling */
+    @page { size: 80mm auto; margin: 6mm; }
+    html, body { height: auto; background: #fff; color: #000; }
+    /* Hide everything except the bill container */
     body * { visibility: hidden; }
     .bill, .bill * { visibility: visible; }
     .bill { position: absolute; left: 0; top: 0; width: 78mm; margin: 0; }
-    /* hide any controls in print */
+
+    /* Remove decorations that harm contrast in print */
+    .bill, .bill * { box-shadow: none !important; background: transparent !important; border-radius: 0 !important; }
+
+    /* High-fidelity print adjustments */
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    .bill table { border-collapse: collapse; }
+    .bill table th, .bill table td { border-bottom: 1px solid #000; padding: 6px 4px; font-size: 13px; }
+
+    /* Avoid page breaks inside the bill */
+    .bill { page-break-inside: avoid; }
+
+    /* Hide on-screen controls */
     .no-print { display: none !important; }
   }
-  /* Small screen preview tweaks */
+
+  /* Screen preview tweaks (unchanged) */
   @media screen {
     .bill { box-shadow: none; }
   }
@@ -50,9 +98,128 @@
     white-space: pre-line; /* preserve line breaks if needed */
   }
 
+  /* Improve legibility for key fields on printed bill */
+  .bill .company-name,
+  .bill .company-address,
+  .bill .invoice-meta,           /* container for date/payment-mode */
+  .bill .invoice-meta .meta-item {
+    color: #000 !important;           /* force pure black */
+    font-weight: 600 !important;      /* stronger weight for crispness */
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Slightly larger sizes for print to avoid blur */
+  .bill .company-name { font-size: 15px; }
+  .bill .company-address { font-size: 12.5px; line-height: 1.2; white-space: pre-line; }
+  .bill .invoice-meta { font-size: 12.5px; }
+  .bill .invoice-meta .meta-item { display:inline-block; margin-right:10px; }
+
+  /* Improve legibility for key fields on printed bill */
+  .bill .invoice-meta,
+  .bill .invoice-meta .meta-item,
+  .bill .invoice-number {
+    color: #000 !important;            /* force pure black */
+    font-weight: 800 !important;       /* heavier weight for sharpness */
+    text-rendering: geometricPrecision;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-text-size-adjust: none;
+  }
+
+  /* Slightly larger sizes for print to avoid blur */
+  .bill .invoice-number { font-size: 14px; letter-spacing: 0.2px; }
+  .bill .invoice-meta { font-size: 13px; }
+  .bill .invoice-meta .meta-item { display:inline-block; margin-right:10px; font-weight:700; }
+
+  @media print {
+    /* ensure header/meta are crisp and 100% black on print */
+    .bill .invoice-number { font-size: 15px; font-weight:900; color:#000; }
+    .bill .company-address, .bill .invoice-meta, .bill .invoice-meta .meta-item {
+      font-size: 13px !important;
+      font-weight: 700 !important;
+      color: #000 !important;
+      text-rendering: geometricPrecision !important;
+      -webkit-font-smoothing: antialiased !important;
+      -moz-osx-font-smoothing: grayscale !important;
+    }
+
+    /* avoid any subtle opacity or color that printers reproduce poorly */
+    .bill * { background: transparent !important; opacity: 1 !important; color: #000 !important; }
+
+    /* tighten line-height for print clarity */
+    .bill { line-height: 1.28; }
+
+    /* ensure table and amounts remain high-contrast */
+    .bill table th, .bill table td { border-bottom: 1px solid #000 !important; color: #000 !important; }
+
+    /* hide interactive controls */
+    .no-print { display: none !important; }
+  }
+
   @media print {
     .bill-header { margin-bottom: 6px; }
   }
+
+  /* Extra print-focused adjustments for date/payment-mode/invoice id to avoid blur */
+  .bill .invoice-meta,
+  .bill .invoice-meta .meta-item,
+  .bill .invoice-number,
+  .bill .invoice-date,
+  .bill .payment-mode {
+    color: #000 !important;            /* force pure black */
+    font-weight: 900 !important;       /* heaviest weight for crisp outlines */
+    font-size: 13.5px !important;      /* slightly larger for clarity */
+    letter-spacing: 0.2px !important;  /* improve glyph spacing for printers */
+    text-rendering: geometricPrecision !important;
+    -webkit-font-smoothing: none !important; /* avoid subpixel AA that can blur on print */
+    -moz-osx-font-smoothing: auto !important;
+    -webkit-text-size-adjust: none !important;
+    background: transparent !important;
+    opacity: 1 !important;
+  }
+
+  /* Ensure meta items display inline and are not wrapped or compressed */
+  .bill .invoice-meta { white-space: nowrap; }
+  .bill .invoice-meta .meta-item { display: inline-block; margin-right: 10px; }
+
+  @media print {
+    /* page and overall print settings */
+    @page { size: 80mm auto; margin: 6mm; }
+    html, body { background: #fff; color: #000; }
+
+    /* Apply high-contrast, high-precision text rendering for the meta region */
+    .bill .invoice-meta,
+    .bill .invoice-meta .meta-item,
+    .bill .invoice-number,
+    .bill .invoice-date,
+    .bill .payment-mode {
+      color: #000 !important;
+      font-weight: 900 !important;
+      font-size: 14px !important;
+      letter-spacing: 0.25px !important;
+      text-rendering: geometricPrecision !important;
+      -webkit-font-smoothing: antialiased !important;
+      -moz-osx-font-smoothing: grayscale !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+
+    /* remove shadows and subtle backgrounds that hamper clarity */
+    .bill, .bill * { box-shadow: none !important; text-shadow: none !important; background: transparent !important; }
+
+    /* Prevent the browser from scaling the page; ensure printing at 100% */
+    body { -webkit-transform: none !important; transform: none !important; }
+
+    /* Keep tables and amounts crisp */
+    .bill table th, .bill table td { border-bottom: 1px solid #000 !important; color: #000 !important; }
+
+    /* Hide UI controls */
+    .no-print { display: none !important; }
+  }
+
+  /* ...existing styles ... */
 </style>
 
 <div class="bill">

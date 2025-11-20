@@ -3,6 +3,7 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from passlib.hash import pbkdf2_sha256
 from dotenv import load_dotenv
 from .db import get_db, init_db
+import time
 
 # Only load local .env when running in non-production and DATABASE_URL is not provided.
 if os.environ.get("FLASK_ENV", "").lower() != "production" and not os.environ.get("DATABASE_URL"):
@@ -28,11 +29,47 @@ except Exception as e:
   # don't exit in production; keep app running so we can inspect logs
   # sys.exit(1)
 
+# Session timeout (seconds) — default 3600 (1 hour).
+# Configure via environment variable SESSION_TIMEOUT (seconds) if you want longer/shorter.
+SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "3600"))
+
 # -------- Helpers --------
 def require_admin():
-  if not session.get("admin_id"):
+  """Return True if admin session is active and not expired; otherwise clear session and require login."""
+  admin_id = session.get("admin_id")
+  if not admin_id:
+    # debug print to see session contents on every protected page hit
+    print("require_admin: no admin_id in session. session keys:", dict(session))
     flash("Please log in as admin.")
     return False
+
+  # Check last-active timestamp for inactivity timeout
+  try:
+    last = session.get("_last_active")
+    if last is None:
+      # no timestamp -> consider session stale
+      print("require_admin: no last_active timestamp, clearing session")
+      session.clear()
+      flash("Session expired. Please log in again.")
+      return False
+    now = int(time.time())
+    if (now - int(last)) > SESSION_TIMEOUT:
+      print(f"require_admin: session expired (now={now}, last={last}, timeout={SESSION_TIMEOUT})")
+      session.clear()
+      flash("Session expired. Please log in again.")
+      return False
+    # update last-active to extend session on activity (sliding window)
+    session["_last_active"] = now
+    session.modified = True
+  except Exception as e:
+    print("require_admin: timestamp check error:", e)
+    # on error, clear session defensively
+    session.clear()
+    flash("Session error. Please log in again.")
+    return False
+
+  # debug print to confirm admin id present and session active
+  print("require_admin: admin_id:", admin_id, "last_active:", session.get("_last_active"))
   return True
 
 def current_stock(conn, item_id):
@@ -42,43 +79,76 @@ def current_stock(conn, item_id):
 # -------- Auth --------
 @app.route("/register", methods=["GET", "POST"])
 def register():
-  conn = get_db()
-  if request.method == "POST":
-    email = request.form["email"].lower().strip()
-    password = request.form["password"]
-    if not email or not password:
-      flash("Email and password required.")
-      return redirect(url_for("register"))
-    pw_hash = pbkdf2_sha256.hash(password)
-    try:
-      conn.execute("INSERT INTO admins (email, password_hash) VALUES (%s, %s)", (email, pw_hash))
-      conn.commit()
-      flash("Admin registered. Please log in.")
-      return redirect(url_for("login"))
-    except Exception:
-      flash("Registration failed. Email may already exist.")
-  return render_template("register.html")
+    conn = get_db()
+    if request.method == "POST":
+        # ensure stored emails are normalized to lowercase
+        email = request.form["email"].lower().strip()
+        password = request.form["password"]
+        if not email or not password:
+          flash("Email and password required.")
+          return redirect(url_for("register"))
+        pw_hash = pbkdf2_sha256.hash(password)
+        try:
+            # insert normalized email
+            conn.execute("INSERT INTO admins (email, password_hash) VALUES (%s, %s)", (email, pw_hash))
+            conn.commit()
+            flash("Admin registered. Please log in.")
+            return redirect(url_for("login"))
+        except Exception:
+            flash("Registration failed. Email may already exist.")
+    return render_template("register.html")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-  conn = get_db()
-  if request.method == "POST":
-    email = request.form["email"].lower().strip()
-    password = request.form["password"]
-    print(f"Login attempt for email: {email}")
-    admin = conn.execute("SELECT * FROM admins WHERE email=%s", (email,)).fetchone()
-    if not admin:
-      print(f"No admin found with email: {email}")
-      flash("Invalid credentials.")
-    elif pbkdf2_sha256.verify(password, admin["password_hash"]):
-      print(f"Login successful for: {email}")
-      session["admin_id"] = admin["id"]
-      session["admin_email"] = admin["email"]
-      return redirect(url_for("dashboard"))
-    else:
-      print(f"Password verification failed for: {email}")
-      flash("Invalid credentials.")
-  return render_template("login.html")
+    conn = get_db()
+    if request.method == "POST":
+        email = request.form["email"].lower().strip()
+        password = request.form["password"]
+        print(f"Login attempt for email: {email}")
+        try:
+            admin = conn.execute("SELECT * FROM admins WHERE email=?", (email,)).fetchone()
+        except Exception as e:
+            print("login: DB select error:", e)
+            admin = None
+
+        print("login: fetched admin row:", admin)
+
+        if not admin:
+            print(f"No admin found with email: {email}")
+            flash("Invalid credentials.")
+        else:
+            # ...existing password verification code...
+            stored_hash = admin.get("password_hash") if isinstance(admin, dict) else (admin["password_hash"] if admin else None)
+            try:
+                verified = pbkdf2_sha256.verify(password, stored_hash)
+            except Exception as e:
+                print("login: verify error:", e)
+                verified = False
+
+            if verified:
+                print(f"Login successful for: {email}")
+                # ensure admin_id stored in session
+                admin_id_resolved = admin.get("id") if isinstance(admin, dict) else admin["id"]
+                session["admin_id"] = admin_id_resolved
+                session["admin_email"] = admin.get("email") if isinstance(admin, dict) else admin["email"]
+                # set last-active timestamp for session timeout sliding window
+                session["_last_active"] = int(time.time())
+                session.permanent = True
+                session.modified = True
+
+                # ensure Flask writes the session cookie into the redirect response immediately
+                from flask import make_response
+                resp = make_response(redirect(url_for("dashboard")))
+                try:
+                    app.session_interface.save_session(app, session, resp)
+                except Exception as e:
+                    print("login: save_session failed:", e)
+                print("login: session after set:", dict(session))
+                return resp
+            else:
+                print(f"Password verification failed for: {email}")
+                flash("Invalid credentials.")
+    return render_template("login.html")
 
 @app.route("/logout")
 def logout():
@@ -227,18 +297,75 @@ def checkout():
           try:
             conn.execute("ALTER TABLE invoices ADD COLUMN payment_mode TEXT")
           except Exception:
-            # ignore if DB refuses (concurrency or Postgres restrictions) — we'll fail later with clear error
             pass
       except Exception:
-        # best-effort; continue
         pass
 
-      # Create invoice (do not commit yet)
-      conn.execute(
-        "INSERT INTO invoices (invoice_number, user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-        (invoice_number, user["id"], subtotal, tax, total, admin_id, payment_mode)
-      )
-      invoice = conn.execute("SELECT * FROM invoices WHERE invoice_number=%s", (invoice_number,)).fetchone()
+      # Create invoice and ensure invoice_number is set at INSERT time.
+      if conn.driver == "pg":
+        # Postgres: reserve a sequence value from the invoices id sequence, build invoice_number, then insert with that id.
+        try:
+          seq_row = conn.execute("SELECT pg_get_serial_sequence('invoices','id') AS seq").fetchone()
+          seq_name = seq_row.get("seq") if seq_row else None
+        except Exception:
+          seq_name = None
+
+        if seq_name:
+          # get next sequence value
+          nid_row = conn.execute("SELECT nextval(%s) AS nid", (seq_name,)).fetchone()
+          invoice_id = nid_row.get("nid") if nid_row else None
+        else:
+          invoice_id = None
+
+        if invoice_id:
+          invoice_number = f"INV-{int(invoice_id):06d}"
+          conn.execute(
+            "INSERT INTO invoices (id, invoice_number, user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (invoice_id, invoice_number, user["id"], subtotal, tax, total, admin_id, payment_mode)
+          )
+          conn.commit()
+          # conn.commit() closes the Postgres connection inside DBConnection,
+          # so open a fresh connection to read the inserted invoice
+          #          fresh = get_db()
+          #          try:
+          #            invoice = fresh.execute("SELECT * FROM invoices WHERE id=%s", (invoice_id,)).fetchone()
+          #          finally:
+          #            try:
+          #              fresh.rollback()
+          #            except Exception:
+          #              pass
+          # use a fresh connection for further work (select + remaining inserts)
+          conn = get_db()
+          invoice = conn.execute("SELECT * FROM invoices WHERE id=%s", (invoice_id,)).fetchone()
+        else:
+          # Fallback: insert with RETURNING id and compute invoice_number afterwards (rare)
+          row = conn.execute(
+            "INSERT INTO invoices (user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (user["id"], subtotal, tax, total, admin_id, payment_mode)
+          ).fetchone()
+          invoice_id = row["id"] if row else None
+          invoice_number = f"INV-{int(invoice_id):06d}" if invoice_id else None
+          if invoice_id and invoice_number:
+            conn.execute("UPDATE invoices SET invoice_number=%s WHERE id=%s", (invoice_number, invoice_id))
+            conn.commit()
+          # commit above may have closed connection; use fresh connection for subsequent work
+          conn = get_db()
+          invoice = conn.execute("SELECT * FROM invoices WHERE id=%s", (invoice_id,)).fetchone()
+      else:
+        # SQLite: insert then read last_insert_rowid(), then update invoice_number
+        conn.execute(
+          "INSERT INTO invoices (user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (?, ?, ?, ?, ?, ?)",
+          (user["id"], subtotal, tax, total, admin_id, payment_mode)
+        )
+        conn.commit()
+        invoice_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone().get("id")
+        invoice_number = f"INV-{int(invoice_id):06d}" if invoice_id else None
+        if invoice_id and invoice_number:
+          conn.execute("UPDATE invoices SET invoice_number=? WHERE id=?", (invoice_number, invoice_id))
+          conn.commit()
+        # For SQLite the same connection is still valid; read directly
+        invoice_row = conn.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,))
+        invoice = invoice_row.fetchone() if hasattr(invoice_row, "fetchone") else invoice_row
 
       # Add invoice items and update stock (all on same conn)
       for cart_item in cart:
@@ -285,62 +412,50 @@ def checkout():
   subtotal = sum(item["unit_price"] * item["qty"] for item in cart)
   return render_template("checkout.html", cart=cart, subtotal=subtotal)
 
+# -------- Checkout search (case-insensitive) --------
 @app.route("/checkout/search", methods=["GET"])
 def checkout_search():
-  if not require_admin():
-    return jsonify({"error": "Unauthorized"}), 401
-  
-  query = request.args.get("q", "").strip()
-  admin_id = session.get("admin_id")
-  
-  print(f"\n--- Search Request ---")
-  print(f"Query: '{query}'")
-  print(f"Admin ID: {admin_id}")
-  print(f"Query length: {len(query)}")
-  
-  if not query or len(query) < 3:
-    print(f"Query too short (min 3 chars required)")
-    return jsonify([])
-  
-  conn = get_db()
-  
-  try:
-    # First check if admin has any items
-    admin_items_count = conn.execute(
-      "SELECT COUNT(*) as cnt FROM inventory_items WHERE admin_id=%s", 
-      (admin_id,)
-    ).fetchone()["cnt"]
-    print(f"Admin has {admin_items_count} total items")
-    
-    # Search by SKU or name - only this admin's items
-    items = conn.execute("""
-      SELECT id, sku, name, unit_price 
-      FROM inventory_items 
-      WHERE admin_id=%s AND (sku LIKE %s OR name LIKE %s)
-      ORDER BY name
-    """, (admin_id, f"%{query}%", f"%{query}%")).fetchall()
-    
-    print(f"Search found {len(items)} matching items")
-    
-    result = []
-    for item in items:
-      stock = current_stock(conn, item["id"])
-      result.append({
-        "id": item["id"],
-        "sku": item["sku"],
-        "name": item["name"],
-        "unit_price": float(item["unit_price"]),
-        "stock": stock
-      })
-      print(f"  - {item['sku']}: {item['name']} (stock: {stock})")
-    
-    print(f"✓ Search successful: {len(result)} results\n")
-    return jsonify(result)
-  except Exception as e:
-    print(f"✗ Search error: {e}\n")
-    import traceback
-    traceback.print_exc()
-    return jsonify({"error": str(e)}), 500
+    if not require_admin():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    query = request.args.get("q", "").strip()
+    admin_id = session.get("admin_id")
+    if not query or len(query) < 3:
+        return jsonify([])
+
+    conn = get_db()
+    try:
+        if conn.driver == "pg":
+            # Postgres: use ILIKE for case-insensitive pattern match
+            items = conn.execute("""
+                SELECT id, sku, name, unit_price
+                FROM inventory_items
+                WHERE admin_id=%s AND (sku ILIKE %s OR name ILIKE %s)
+                ORDER BY name
+            """, (admin_id, f"%{query}%", f"%{query}%")).fetchall()
+        else:
+            # SQLite: use LOWER(...) comparison
+            items = conn.execute("""
+                SELECT id, sku, name, unit_price
+                FROM inventory_items
+                WHERE admin_id=? AND (LOWER(sku) LIKE LOWER(?) OR LOWER(name) LIKE LOWER(?))
+                ORDER BY name
+            """, (admin_id, f"%{query}%", f"%{query}%")).fetchall()
+
+        result = []
+        for item in items:
+            stock = current_stock(conn, item["id"])
+            result.append({
+                "id": item["id"],
+                "sku": item["sku"],
+                "name": item["name"],
+                "unit_price": float(item["unit_price"]),
+                "stock": stock
+            })
+        return jsonify(result)
+    except Exception as e:
+        print("checkout_search error:", e)
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/checkout/add-to-cart", methods=["POST"])
 def add_to_cart():
@@ -468,55 +583,155 @@ def order_items(invoice_id):
 
 @app.route("/analytics", methods=["GET"])
 def analytics():
-	"""Show pivoted sales by payment mode and list orders for selected mode."""
-	if not require_admin():
-		return redirect(url_for("login"))
-	conn = get_db()
-	admin_id = session.get("admin_id")
+    if not require_admin():
+        return redirect(url_for("login"))
+    conn = get_db()
+    admin_id = session.get("admin_id")
 
-	# get available payment modes for this admin
-	modes_rows = conn.execute(
-		"SELECT DISTINCT COALESCE(NULLIF(payment_mode, ''), 'Unknown') AS payment_mode FROM invoices WHERE admin_id=%s ORDER BY payment_mode",
-		(admin_id,)
-	).fetchall()
-	payment_modes = [r["payment_mode"] for r in modes_rows] if modes_rows else []
+    # available payment modes for dropdown
+    modes_rows = conn.execute(
+        "SELECT DISTINCT COALESCE(NULLIF(payment_mode, ''), 'Unknown') AS payment_mode FROM invoices WHERE admin_id=%s ORDER BY payment_mode",
+        (admin_id,)
+    ).fetchall()
+    payment_modes = [r["payment_mode"] for r in modes_rows] if modes_rows else []
 
-	# selected mode from query string; 'All' means no filter
-	selected = request.args.get("payment_mode", "All")
+    selected = request.args.get("payment_mode", "All")
+    selected_date = request.args.get("date", "").strip()  # expected YYYY-MM-DD or empty
 
-	# Build invoice list query, filter by payment_mode if selected != All
-	params = [admin_id]
-	mode_filter = ""
-	if selected and selected != "All":
-		mode_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = %s"
-		params.append(selected)
+    # helper to build date filter and params depending on driver
+    def _append_date_filter(params):
+        if not selected_date:
+            return "", params
+        if conn.driver == "pg":
+            return " AND DATE(i.created_at) = %s", params + [selected_date]
+        else:
+            return " AND DATE(created_at) = ?", params + [selected_date]
 
-	# Query invoices with aggregated qty & amount per invoice
-	rows = conn.execute(f"""
-		SELECT
-			i.id,
-			i.invoice_number,
-			i.created_at,
-			COALESCE(u.name, '') AS customer_name,
-			COALESCE(SUM(ii.quantity),0) AS total_qty,
-			COALESCE(SUM(ii.line_total),0) AS total_amount,
-			COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') AS payment_mode
-		FROM invoices i
-		LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
-		LEFT JOIN users u ON u.id = i.user_id
-		WHERE i.admin_id=%s {mode_filter}
-		GROUP BY i.id, i.invoice_number, i.created_at, u.name, payment_mode
-		ORDER BY i.created_at DESC
-	""", tuple(params)).fetchall()
+    # If "All" selected, produce a dict of payment_mode -> rows + totals
+    if selected == "All":
+        groups = {}
+        grand = {"orders": 0, "total_qty": 0, "total_amount": 0.0}
+        for pm in payment_modes:
+            params = [admin_id]
+            # mode filter param placeholder selection
+            if conn.driver == "pg":
+                mode_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = %s"
+                params.append(pm)
+                date_clause, params = _append_date_filter(params)
+            else:
+                mode_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = ?"
+                params.append(pm)
+                date_clause, params = _append_date_filter(params)
 
-	# Consolidated totals for the displayed rows
-	totals = {"orders": 0, "total_qty": 0, "total_amount": 0.0}
-	for r in rows:
-		totals["orders"] += 1
-		totals["total_qty"] += int(r["total_qty"] or 0)
-		totals["total_amount"] += float(r["total_amount"] or 0.0)
+            rows = conn.execute(f"""
+                SELECT
+                    i.id,
+                    i.invoice_number,
+                    i.created_at,
+                    COALESCE(u.name, '') AS customer_name,
+                    COALESCE(SUM(ii.quantity),0) AS total_qty,
+                    COALESCE(SUM(ii.line_total),0) AS total_amount,
+                    COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') AS payment_mode
+                FROM invoices i
+                LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
+                LEFT JOIN users u ON u.id = i.user_id
+                WHERE i.admin_id=%s {mode_filter} {date_clause}
+                GROUP BY i.id, i.invoice_number, i.created_at, u.name, payment_mode
+                ORDER BY i.created_at DESC
+            """, tuple(params)).fetchall()
 
-	return render_template("analytics.html", payment_modes=payment_modes, selected=selected, rows=rows, totals=totals)
+            totals = {"orders": 0, "total_qty": 0, "total_amount": 0.0}
+            for r in rows:
+                totals["orders"] += 1
+                totals["total_qty"] += int(r["total_qty"] or 0)
+                totals["total_amount"] += float(r["total_amount"] or 0.0)
+            groups[pm] = {"rows": rows, "totals": totals}
+            grand["orders"] += totals["orders"]
+            grand["total_qty"] += totals["total_qty"]
+            grand["total_amount"] += totals["total_amount"]
+
+        return render_template("analytics.html", payment_modes=payment_modes, selected=selected, groups=groups, grand=grand, selected_date=selected_date)
+
+    # else: single table behavior (filter by selected mode if not "All")
+    params = [admin_id]
+    mode_filter = ""
+    if selected and selected != "All":
+        if conn.driver == "pg":
+            mode_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = %s"
+            params.append(selected)
+        else:
+            mode_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = ?"
+            params.append(selected)
+    date_clause, params = _append_date_filter(params)
+
+    rows = conn.execute(f"""
+        SELECT
+            i.id,
+            i.invoice_number,
+            i.created_at,
+            COALESCE(u.name, '') AS customer_name,
+            COALESCE(SUM(ii.quantity),0) AS total_qty,
+            COALESCE(SUM(ii.line_total),0) AS total_amount,
+            COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') AS payment_mode
+        FROM invoices i
+        LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
+        LEFT JOIN users u ON u.id = i.user_id
+        WHERE i.admin_id=%s {mode_filter} {date_clause}
+        GROUP BY i.id, i.invoice_number, i.created_at, u.name, payment_mode
+        ORDER BY i.created_at DESC
+    """, tuple(params)).fetchall()
+
+    # If filtered query returned nothing, build groups as in "All" so user sees other payment modes
+    if not rows:
+        groups = {}
+        grand = {"orders": 0, "total_qty": 0, "total_amount": 0.0}
+        for pm in payment_modes:
+            p_params = [admin_id]
+            if conn.driver == "pg":
+                pm_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = %s"
+                p_params.append(pm)
+            else:
+                pm_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = ?"
+                p_params.append(pm)
+            date_clause_pm, p_params = _append_date_filter(p_params)
+            grp_rows = conn.execute(f"""
+                SELECT
+                    i.id,
+                    i.invoice_number,
+                    i.created_at,
+                    COALESCE(u.name, '') AS customer_name,
+                    COALESCE(SUM(ii.quantity),0) AS total_qty,
+                    COALESCE(SUM(ii.line_total),0) AS total_amount,
+                    COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') AS payment_mode
+                FROM invoices i
+                LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
+                LEFT JOIN users u ON u.id = i.user_id
+                WHERE i.admin_id=%s {pm_filter} {date_clause_pm}
+                GROUP BY i.id, i.invoice_number, i.created_at, u.name, payment_mode
+                ORDER BY i.created_at DESC
+            """, tuple(p_params)).fetchall()
+
+            totals = {"orders": 0, "total_qty": 0, "total_amount": 0.0}
+            for r in grp_rows:
+                totals["orders"] += 1
+                totals["total_qty"] += int(r["total_qty"] or 0)
+                totals["total_amount"] += float(r["total_amount"] or 0.0)
+            groups[pm] = {"rows": grp_rows, "totals": totals}
+            grand["orders"] += totals["orders"]
+            grand["total_qty"] += totals["total_qty"]
+            grand["total_amount"] += totals["total_amount"]
+
+        # render grouped view as fallback
+        return render_template("analytics.html", payment_modes=payment_modes, selected=selected, groups=groups, grand=grand, selected_date=selected_date, fallback_groups=True)
+
+    # Normal single-mode rendering (rows present)
+    totals = {"orders": 0, "total_qty": 0, "total_amount": 0.0}
+    for r in rows:
+        totals["orders"] += 1
+        totals["total_qty"] += int(r["total_qty"] or 0)
+        totals["total_amount"] += float(r["total_amount"] or 0.0)
+
+    return render_template("analytics.html", payment_modes=payment_modes, selected=selected, rows=rows, totals=totals, selected_date=selected_date)
 
 if __name__ == "__main__":
   app.run(debug=True)

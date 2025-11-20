@@ -171,9 +171,12 @@ def init_db():
         return
 
     sql = schema_path.read_text(encoding="utf-8")
-    tmp_conn = None
-    try:
-        tmp_conn = psycopg2.connect(_get_dsn())
+    if DRIVER == "sqlite":
+        # executescript supports multiple statements
+        _sqlite_conn.executescript(sql)
+    else:
+        # create a temporary connection for schema application
+        tmp_conn = psycopg2.connect(_pg_dsn)
         cur = tmp_conn.cursor()
         try:
             cur.execute(sql)
@@ -189,8 +192,75 @@ def init_db():
                 tmp_conn.commit()
             except Exception:
                 pass
-    finally:
-        if tmp_conn:
+
+        # --- NEW: ensure invoice_number exists and is populated consistently ---
+        try:
+            # Postgres path
+            if DRIVER == "pg":
+                try:
+                    # Add column if missing
+                    cur.execute("ALTER TABLE invoices ADD COLUMN IF NOT EXISTS invoice_number TEXT;")
+                except Exception:
+                    # If ALTER ... IF NOT EXISTS not supported, ignore
+                    pass
+                # Populate missing invoice_number values using the reserved id format
+                try:
+                    cur.execute("""
+                        UPDATE invoices
+                        SET invoice_number = CONCAT('INV-', lpad(id::text, 6, '0'))
+                        WHERE invoice_number IS NULL OR invoice_number = '';
+                    """)
+                except Exception:
+                    pass
+                # Enforce NOT NULL and unique index (safe if column now populated)
+                try:
+                    cur.execute("ALTER TABLE invoices ALTER COLUMN invoice_number SET NOT NULL;")
+                except Exception:
+                    # may fail if some rows lack values; ignore to avoid aborting init
+                    pass
+                try:
+                    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_invoice_number ON invoices (invoice_number);")
+                except Exception:
+                    pass
+                try:
+                    tmp_conn.commit()
+                except Exception:
+                    pass
+
+            else:
+                # SQLite path
+                # Check existing columns
+                cur.execute("PRAGMA table_info(invoices);")
+                cols = [r[1] for r in cur.fetchall()]
+                if "invoice_number" not in cols:
+                    try:
+                        cur.execute("ALTER TABLE invoices ADD COLUMN invoice_number TEXT;")
+                    except Exception:
+                        pass
+                # Populate invoice_number for existing rows
+                try:
+                    cur.execute("""
+                        UPDATE invoices
+                        SET invoice_number = 'INV-' || printf('%06d', id)
+                        WHERE invoice_number IS NULL OR invoice_number = '';
+                    """)
+                except Exception:
+                    pass
+                try:
+                    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_invoice_number ON invoices (invoice_number);")
+                except Exception:
+                    pass
+                try:
+                    tmp_conn.commit()
+                except Exception:
+                    pass
+        except Exception:
+            # any migration error should not break startup; print for diagnostics
+            try:
+                tmp_conn.rollback()
+            except Exception:
+                pass
+        finally:
             try:
                 tmp_conn.close()
             except Exception:

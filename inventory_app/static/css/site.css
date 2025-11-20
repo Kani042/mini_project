@@ -125,48 +125,61 @@ h1, h2 { color: #333; margin-bottom: 12px; }
   -webkit-overflow-scrolling: touch; /* smooth scrolling on iOS */
 }
 
-/* Make tables flexible: allow them to shrink on mobile and let container provide scroll */
-.table-responsive table {
+/* Base table rules: let tables size to container and wrap by default (desktop/tablet) */
+.table-responsive table,
+table {
   width: 100%;
+  table-layout: auto; /* allow columns to size naturally and avoid forcing overflow */
   border-collapse: collapse;
-  min-width: 0; /* allow table to shrink below column min width on small screens */
+  max-width: 100%;
 }
 
-/* Default cell styling */
+/* Default cells: allow wrapping on larger screens so content doesn't force horizontal overflow */
 .table-responsive th,
-.table-responsive td {
-  padding: 8px 10px;
-  vertical-align: middle;
+.table-responsive td,
+table th,
+table td {
+  white-space: normal;   /* allow wrapping */
   word-break: break-word;
-  white-space: nowrap; /* keep cells compact on wide screens */
 }
 
-/* On small screens allow wrapping inside cells and reduce font-size */
+/* Keep the force-scroll helper, but only enforce nowrap/min-width on small screens */
+.table-responsive.force-scroll {
+  width: 100%;
+  -webkit-overflow-scrolling: touch;
+  overflow-x: visible;  /* no forced scrollbar on larger screens */
+  overflow-y: visible;
+}
+
+/* Mobile: force horizontal scrolling for readability */
 @media (max-width: 768px) {
-  .table-responsive table {
-    font-size: 14px;
+  .table-responsive.force-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
   }
-  .table-responsive th,
-  .table-responsive td {
-    white-space: normal; /* allow wrapping */
-    padding: 6px 8px;
+  .table-responsive.force-scroll table {
+    min-width: 700px; /* triggers horizontal scroll on narrow viewports */
+  }
+  .table-responsive.force-scroll table th,
+  .table-responsive.force-scroll table td {
+    white-space: nowrap; /* prevent wrapping on mobile to enable horizontal scrolling */
+  }
+  .table-responsive.force-scroll::-webkit-scrollbar {
+    height: 10px;
+  }
+  .table-responsive.force-scroll::-webkit-scrollbar-track {
+    background: #f1f1f1;
+  }
+  .table-responsive.force-scroll::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 8px;
   }
 }
 
-/* Checkout cart summary: stack and align totals on small screens */
-.cart-summary {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  align-items: center;
-  margin-top: 12px;
-  flex-wrap: wrap; /* allow stacking on narrow viewports */
-}
-.cart-summary .subtotal,
-.cart-summary .tax,
-.cart-summary .total {
-  min-width: 140px;
-  text-align: right;
+/* Very small screens: slightly reduce min-width so scroll remains usable */
+@media (max-width: 480px) {
+  .table-responsive.force-scroll table { min-width: 640px; font-size: 13px; }
+  .table-responsive.force-scroll table th, .table-responsive.force-scroll table td { padding: 6px 8px; }
 }
 
 /* Ensure buttons and inputs touch-friendly */
@@ -181,49 +194,4 @@ h1, h2 { color: #333; margin-bottom: 12px; }
 @media (max-width:600px) {
   .form-row { grid-template-columns:1fr; }
   .header-links { text-align:right; }
-}
-
-/* Force-scroll helper: ensure a horizontal scrollbar appears when table content overflows */
-.table-responsive.force-scroll {
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch; /* smooth scrolling on iOS */
-}
-
-/* Prevent wrapping inside cells for forced-scroll tables so horizontal scroll is enabled */
-.table-responsive.force-scroll table th,
-.table-responsive.force-scroll table td {
-  white-space: nowrap;
-}
-
-/* Provide a reasonable min-width so tables will scroll when viewport is narrow.
-   Adjust value if your tables are wider or narrower. */
-.table-responsive.force-scroll table {
-  min-width: 900px;
-}
-
-/* Visible scrollbar styling for WebKit browsers (Chrome, Safari) */
-.table-responsive.force-scroll::-webkit-scrollbar {
-  height: 10px;
-}
-.table-responsive.force-scroll::-webkit-scrollbar-track {
-  background: #f1f1f1;
-}
-.table-responsive.force-scroll::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
-  border-radius: 8px;
-}
-.table-responsive.force-scroll::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
-}
-
-/* Thin scrollbar for Firefox */
-@supports (scrollbar-width: thin) {
-  .table-responsive.force-scroll { scrollbar-width: thin; scrollbar-color: #c1c1c1 #f1f1f1; }
-}
-
-/* On very small screens reduce min-width so user sees reasonable scrolling */
-@media (max-width: 480px) {
-  .table-responsive.force-scroll table { min-width: 640px; font-size: 13px; }
-  .table-responsive.force-scroll table th, .table-responsive.force-scroll table td { padding: 6px 8px; }
 }

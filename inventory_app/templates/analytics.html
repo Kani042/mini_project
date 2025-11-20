@@ -7,62 +7,128 @@
   <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
       <h2>Sales by Payment Mode</h2>
-      <small class="text-muted">Select a payment mode to list orders — consolidated totals shown below</small>
+      <small class="text-muted">Select a payment mode and/or date to list orders — consolidated totals shown below</small>
     </div>
-      </div>
+    <div class="d-flex gap-2 align-items-center no-print">
+      <img src="{{ url_for('static', filename='print.png') }}"
+           alt="Print"
+           title="Print / Save as PDF"
+           style="cursor:pointer; width:28px; height:28px;"
+           onclick="window.print()"
+           class="no-print">
+    </div>
+  </div>
 
-  <form method="get" class="mb-3">
-    <div class="row g-2 align-items-center">
-      <div class="col-auto">
-        <label class="form-label mb-0">Payment Mode</label>
-      </div>
-      <div class="col-auto">
-        <select name="payment_mode" class="form-select" onchange="this.form.submit()">
-          <option value="All" {% if selected == "All" %}selected{% endif %}>All</option>
-          {% for pm in payment_modes %}
-            <option value="{{ pm }}" {% if pm == selected %}selected{% endif %}>{{ pm }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-auto">
-        <noscript><button type="submit" class="btn btn-primary">Filter</button></noscript>
+  <form method="get" class="mb-3 d-flex gap-3 align-items-center">
+    <div>
+      <label class="form-label mb-0">Payment Mode</label>
+      <select name="payment_mode" class="form-select" onchange="this.form.submit()">
+        <option value="All" {% if selected == "All" %}selected{% endif %}>All</option>
+        {% for pm in payment_modes %}
+          <option value="{{ pm }}" {% if pm == selected %}selected{% endif %}>{{ pm }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div>
+      <label class="form-label mb-0">Date</label>
+      <div class="input-group">
+        <input type="date" name="date" class="form-control" onchange="this.form.submit()" value="{{ selected_date }}">
+        <button type="button" class="btn btn-outline-secondary" title="Clear date" onclick="clearDate()">Clear</button>
       </div>
     </div>
+
+    <noscript>
+      <div><button type="submit" class="btn btn-primary">Filter</button></div>
+    </noscript>
   </form>
 
-  <div class="table-responsive">
-    <table class="table table-striped table-sm">
-      <thead>
-        <tr>
-          <th>Invoice #</th>
-          <th>Date</th>
-          <th>Customer</th>
-          <th class="text-end">Quantity</th>
-          <th class="text-end">Amount</th>
-          <th>Payment Mode</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in rows %}
-        <tr>
-          <td><a href="{{ url_for('invoice_view', invoice_id=r.id) }}">{{ r.invoice_number }}</a></td>
-          <td>{{ r.created_at.strftime('%Y-%m-%d') if r.created_at }}</td>
-          <td>{{ r.customer_name or 'N/A' }}</td>
-          <td class="text-end">{{ r.total_qty }}</td>
-          <td class="text-end">${{ '%.2f'|format(r.total_amount|float) }}</td>
-          <td>{{ r.payment_mode }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-      <tfoot class="table-light">
-        <tr>
-          <th colspan="3" class="text-end">Total</th>
-          <th class="text-end">{{ totals.total_qty }}</th>
-          <th class="text-end">${{ '%.2f'|format(totals.total_amount) }}</th>
-          <th class="text-end">Orders: {{ totals.orders }}</th>
-        </tr>
-      </tfoot>
-    </table>
-  </div>
+  {# If selected==All or fallback_groups requested, render groups view #}
+  {% if selected == "All" or fallback_groups %}
+    {% set ns = namespace(rendered=0) %}
+    {% for pm, group in groups.items() %}
+      {% if group.rows and group.rows|length > 0 %}
+        {% set ns.rendered = ns.rendered + 1 %}
+        <h5 class="mt-3">{{ pm }} — Orders: {{ group.totals.orders }}, Qty: {{ group.totals.total_qty }}, Amount: ${{ '%.2f'|format(group.totals.total_amount) }}</h5>
+        <div class="table-responsive mb-4">
+          <table class="table table-striped table-sm">
+            <thead>
+              <tr>
+                <th>Invoice #</th>
+                <th>Date</th>
+                <th>Customer</th>
+                <th class="text-end">Quantity</th>
+                <th class="text-end">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in group.rows %}
+              <tr>
+                <td>{{ r.invoice_number or ('INV-' ~ '%06d'|format(r.id)) }}</td>
+                <td>{{ r.created_at.strftime('%Y-%m-%d') if r.created_at and not r.created_at is string else (r.created_at.split(' ')[0] if r.created_at else '') }}</td>
+                <td>{{ r.customer_name or 'N/A' }}</td>
+                <td class="text-end">{{ r.total_qty }}</td>
+                <td class="text-end">${{ '%.2f'|format(r.total_amount|float) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    {% endfor %}
+
+    {% if ns.rendered == 0 %}
+      <div class="mt-3 alert alert-info">No data for the selected filters (payment mode/date).</div>
+    {% else %}
+      <div class="mt-3 alert alert-secondary">
+        <strong>Grand Totals</strong> — Orders: {{ grand.orders }}, Quantity: {{ grand.total_qty }}, Amount: ${{ '%.2f'|format(grand.total_amount) }}
+      </div>
+    {% endif %}
+
+  {% else %}
+    {# Single-mode view (existing) #}
+    <div class="table-responsive">
+      <table class="table table-striped table-sm">
+        <thead>
+          <tr>
+            <th>Invoice #</th>
+            <th>Date</th>
+            <th>Customer</th>
+            <th class="text-end">Quantity</th>
+            <th class="text-end">Amount</th>
+            <th>Payment Mode</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.invoice_number or ('INV-' ~ '%06d'|format(r.id)) }}</td>
+            <td>{{ r.created_at.strftime('%Y-%m-%d') if r.created_at and not r.created_at is string else (r.created_at.split(' ')[0] if r.created_at else '') }}</td>
+            <td>{{ r.customer_name or 'N/A' }}</td>
+            <td class="text-end">{{ r.total_qty }}</td>
+            <td class="text-end">${{ '%.2f'|format(r.total_amount|float) }}</td>
+            <td>{{ r.payment_mode }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot class="table-light">
+          <tr>
+            <th colspan="3" class="text-end">Total</th>
+            <th class="text-end">{{ totals.total_qty }}</th>
+            <th class="text-end">${{ '%.2f'|format(totals.total_amount) }}</th>
+            <th class="text-end">Orders: {{ totals.orders }}</th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  {% endif %}
 </div>
+
+<script>
+function clearDate(){
+  const url = new URL(window.location.href);
+  url.searchParams.delete('date');
+  window.location.href = url.toString();
+}
+</script>
 {% endblock %}

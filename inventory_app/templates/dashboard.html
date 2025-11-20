@@ -36,10 +36,11 @@
                 </span>
               </td>
               <td>
-                <form method="post" action="{{ url_for('add_stock', item_id=item.id) }}" class="d-flex gap-2">
-                  <input name="quantity" type="number" min="1" class="form-control" placeholder="Qty" required>
-                  <input name="reason" class="form-control" placeholder="Reason (optional)">
-                  <button type="submit" class="btn btn-secondary">Add</button>
+                <form method="post" action="{{ url_for('add_stock', item_id=item.id) }}" class="d-flex gap-2 align-items-center flex-nowrap">
+                  <!-- small fixed-width inputs to avoid forcing the button to shrink/wrap -->
+                  <input name="quantity" type="number" min="1" class="form-control form-control-sm" placeholder="Qty" required style="width:80px;">
+                  <input name="reason" class="form-control form-control-sm" placeholder="Reason (optional)" style="width:180px;">
+                  <button type="submit" class="btn btn-secondary" style="white-space:nowrap;">Add</button>
                 </form>
               </td>
             </tr>
