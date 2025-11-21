@@ -21,7 +21,7 @@
             <th>Name</th>
             <th>Price</th>
             <th>Current Stock</th>
-            <th>Add Stock</th>
+            <th>Qty</th>
           </tr>
         </thead>
         <tbody>
@@ -40,7 +40,13 @@
                   <!-- small fixed-width inputs to avoid forcing the button to shrink/wrap -->
                   <input name="quantity" type="number" min="1" class="form-control form-control-sm" placeholder="Qty" required style="width:80px;">
                   <input name="reason" class="form-control form-control-sm" placeholder="Reason (optional)" style="width:180px;">
-                  <button type="submit" class="btn btn-secondary" style="white-space:nowrap;">Add</button>
+                  <input type="hidden" name="op" value="add" class="op-field">
+                  <button type="submit" class="btn btn-success" title="Add stock" onclick="this.form.op.value='add'" style="white-space:nowrap;">
+                    &plus;
+                  </button>
+                  <button type="submit" class="btn btn-danger" title="Reduce stock" onclick="this.form.op.value='sub'" style="white-space:nowrap;">
+                    &minus;
+                  </button>
                 </form>
               </td>
             </tr>

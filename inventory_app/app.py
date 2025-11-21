@@ -4,6 +4,7 @@ from passlib.hash import pbkdf2_sha256
 from dotenv import load_dotenv
 from .db import get_db, init_db
 import time
+from datetime import date
 
 # Only load local .env when running in non-production and DATABASE_URL is not provided.
 if os.environ.get("FLASK_ENV", "").lower() != "production" and not os.environ.get("DATABASE_URL"):
@@ -222,24 +223,50 @@ def inventory_new():
 
 @app.route("/inventory/<int:item_id>/add_stock", methods=["POST"])
 def add_stock(item_id):
-  if not require_admin():
-    return redirect(url_for("login"))
-  conn = get_db()
-  admin_id = session.get("admin_id")
-  
-  # Verify item belongs to this admin
-  item = conn.execute("SELECT * FROM inventory_items WHERE id=%s AND admin_id=%s", (item_id, admin_id)).fetchone()
-  if not item:
-    flash("Item not found or access denied.")
+    if not require_admin():
+        return redirect(url_for("login"))
+    conn = get_db()
+    admin_id = session.get("admin_id")
+
+    # Verify item belongs to this admin
+    item = conn.execute("SELECT * FROM inventory_items WHERE id=%s AND admin_id=%s", (item_id, admin_id)).fetchone()
+    if not item:
+        flash("Item not found or access denied.")
+        return redirect(url_for("dashboard"))
+
+    try:
+        qty_requested = int(request.form["quantity"])
+    except Exception:
+        flash("Invalid quantity.")
+        return redirect(url_for("dashboard"))
+
+    if qty_requested <= 0:
+        flash("Quantity must be positive.")
+        return redirect(url_for("dashboard"))
+
+    reason = request.form.get("reason", "Stock adjustment")
+    op = request.form.get("op", "add")
+
+    # Validate reduction does not drive stock negative
+    if op == "sub":
+        current = current_stock(conn, item_id)
+        # ensure numeric
+        try:
+            current_val = int(current)
+        except Exception:
+            current_val = 0
+        if qty_requested > current_val:
+            flash(f"Cannot reduce by {qty_requested}: only {current_val} in stock.")
+            return redirect(url_for("dashboard"))
+        qty = -abs(qty_requested)
+    else:
+        qty = abs(qty_requested)
+
+    conn.execute("INSERT INTO inventory_stock (item_id, delta_quantity, reason) VALUES (%s, %s, %s)",
+                 (item_id, qty, reason))
+    conn.commit()
+    flash("Stock updated.")
     return redirect(url_for("dashboard"))
-  
-  qty = int(request.form["quantity"])
-  reason = request.form.get("reason", "Add stock")
-  conn.execute("INSERT INTO inventory_stock (item_id, delta_quantity, reason) VALUES (%s, %s, %s)",
-               (item_id, qty, reason))
-  conn.commit()
-  flash("Stock updated.")
-  return redirect(url_for("dashboard"))
 
 # -------- Checkout - New Flow --------
 @app.route("/checkout", methods=["GET", "POST"])
@@ -588,24 +615,68 @@ def analytics():
     conn = get_db()
     admin_id = session.get("admin_id")
 
-    # available payment modes for dropdown
-    modes_rows = conn.execute(
-        "SELECT DISTINCT COALESCE(NULLIF(payment_mode, ''), 'Unknown') AS payment_mode FROM invoices WHERE admin_id=%s ORDER BY payment_mode",
-        (admin_id,)
-    ).fetchall()
+    # Use provided date or default to today when no date provided
+    selected_date = request.args.get("date", None)
+    if selected_date is not None:
+        selected_date = selected_date.strip()
+    # If no date provided, default to today's date (YYYY-MM-DD)
+    if not selected_date:
+        selected_date = date.today().isoformat()
+
+    # Build payment_modes (date-aware) ...
+    if selected_date:
+        # only run date-filtered query when selected_date is non-empty / valid string
+        if conn.driver == "pg":
+            modes_rows = conn.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(payment_mode, ''), 'Unknown') AS payment_mode "
+                "FROM invoices WHERE admin_id=%s AND DATE(created_at)=%s ORDER BY payment_mode",
+                (admin_id, selected_date)
+            ).fetchall()
+        else:
+            modes_rows = conn.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(payment_mode, ''), 'Unknown') AS payment_mode "
+                "FROM invoices WHERE admin_id=? AND DATE(created_at)=? ORDER BY payment_mode",
+                (admin_id, selected_date)
+            ).fetchall()
+    else:
+        # no date filter: include all modes for this admin
+        if conn.driver == "pg":
+            modes_rows = conn.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(payment_mode, ''), 'Unknown') AS payment_mode FROM invoices WHERE admin_id=%s ORDER BY payment_mode",
+                (admin_id,)
+            ).fetchall()
+        else:
+            modes_rows = conn.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(payment_mode, ''), 'Unknown') AS payment_mode FROM invoices WHERE admin_id=? ORDER BY payment_mode",
+                (admin_id,)
+            ).fetchall()
+
     payment_modes = [r["payment_mode"] for r in modes_rows] if modes_rows else []
 
     selected = request.args.get("payment_mode", "All")
-    selected_date = request.args.get("date", "").strip()  # expected YYYY-MM-DD or empty
 
-    # helper to build date filter and params depending on driver
+    # Helper: append date filter fragment and params depending on driver.
     def _append_date_filter(params):
+        # only add a date clause when selected_date is present (non-None)
         if not selected_date:
             return "", params
         if conn.driver == "pg":
             return " AND DATE(i.created_at) = %s", params + [selected_date]
         else:
             return " AND DATE(created_at) = ?", params + [selected_date]
+
+    # Build invoice list query with optional filters
+    params = [admin_id]
+    mode_filter = ""
+    date_filter = ""
+    if selected and selected != "All":
+        if conn.driver == "pg":
+            mode_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = %s"
+            params.append(selected)
+        else:
+            mode_filter = " AND COALESCE(NULLIF(i.payment_mode, ''), 'Unknown') = ?"
+            params.append(selected)
+    date_clause, params = _append_date_filter(params)
 
     # If "All" selected, produce a dict of payment_mode -> rows + totals
     if selected == "All":

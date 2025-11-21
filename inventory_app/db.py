@@ -161,6 +161,9 @@ def init_db():
     """
     Run schema.sql if present (inventory_app/schema.sql or project root schema.sql).
     Safe to call on startup; if tables exist, errors are ignored.
+
+    This implementation detects the configured backend at runtime (Postgres if DATABASE_URL/PG* is present,
+    otherwise SQLite) so we don't depend on a module-level DRIVER variable being defined.
     """
     schema_candidates = [
         BASEDIR / "schema.sql",
@@ -171,100 +174,96 @@ def init_db():
         return
 
     sql = schema_path.read_text(encoding="utf-8")
-    if DRIVER == "sqlite":
-        # executescript supports multiple statements
-        _sqlite_conn.executescript(sql)
-    else:
-        # create a temporary connection for schema application
-        tmp_conn = psycopg2.connect(_pg_dsn)
-        cur = tmp_conn.cursor()
+
+    # Detect Postgres configuration from environment
+    def _postgres_configured():
+        if os.environ.get("DATABASE_URL"):
+            return True
+        # check individual PG env vars as fallback
+        if os.environ.get("PGHOST") or os.environ.get("PGDATABASE") or os.environ.get("PGUSER") or os.environ.get("PGPASSWORD"):
+            return True
+        return False
+
+    if _postgres_configured():
+        # Run schema against Postgres
+        if psycopg2 is None:
+            raise RuntimeError("psycopg2-binary is required for PostgreSQL. Install it in your virtualenv (pip install psycopg2-binary).")
+        tmp_conn = None
         try:
-            cur.execute(sql)
-            tmp_conn.commit()
-        except Exception:
-            # fallback: split statements and run one by one (best-effort)
-            for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
-                try:
-                    cur.execute(stmt)
-                except Exception:
-                    pass
+            # Build DSN if not present (support DATABASE_URL or individual PG* env vars)
+            dsn = os.environ.get("DATABASE_URL", "").strip()
+            if not dsn:
+                pg_host = os.environ.get("PGHOST") or os.environ.get("DB_HOST")
+                pg_db = os.environ.get("PGDATABASE") or os.environ.get("DB_NAME")
+                pg_user = os.environ.get("PGUSER") or os.environ.get("DB_USER")
+                pg_pass = os.environ.get("PGPASSWORD") or os.environ.get("DB_PASSWORD")
+                pg_port = os.environ.get("PGPORT") or os.environ.get("DB_PORT") or "5432"
+                if pg_host and pg_db and pg_user and pg_pass:
+                    dsn = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+            if dsn.startswith("postgres://"):
+                dsn = dsn.replace("postgres://", "postgresql://", 1)
+
+            tmp_conn = psycopg2.connect(dsn)
+            cur = tmp_conn.cursor()
             try:
+                cur.execute(sql)
                 tmp_conn.commit()
             except Exception:
-                pass
-
-        # --- NEW: ensure invoice_number exists and is populated consistently ---
-        try:
-            # Postgres path
-            if DRIVER == "pg":
-                try:
-                    # Add column if missing
-                    cur.execute("ALTER TABLE invoices ADD COLUMN IF NOT EXISTS invoice_number TEXT;")
-                except Exception:
-                    # If ALTER ... IF NOT EXISTS not supported, ignore
-                    pass
-                # Populate missing invoice_number values using the reserved id format
-                try:
-                    cur.execute("""
-                        UPDATE invoices
-                        SET invoice_number = CONCAT('INV-', lpad(id::text, 6, '0'))
-                        WHERE invoice_number IS NULL OR invoice_number = '';
-                    """)
-                except Exception:
-                    pass
-                # Enforce NOT NULL and unique index (safe if column now populated)
-                try:
-                    cur.execute("ALTER TABLE invoices ALTER COLUMN invoice_number SET NOT NULL;")
-                except Exception:
-                    # may fail if some rows lack values; ignore to avoid aborting init
-                    pass
-                try:
-                    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_invoice_number ON invoices (invoice_number);")
-                except Exception:
-                    pass
-                try:
-                    tmp_conn.commit()
-                except Exception:
-                    pass
-
-            else:
-                # SQLite path
-                # Check existing columns
-                cur.execute("PRAGMA table_info(invoices);")
-                cols = [r[1] for r in cur.fetchall()]
-                if "invoice_number" not in cols:
+                # fallback: split statements and run one by one (best-effort)
+                for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
                     try:
-                        cur.execute("ALTER TABLE invoices ADD COLUMN invoice_number TEXT;")
+                        cur.execute(stmt)
                     except Exception:
                         pass
-                # Populate invoice_number for existing rows
-                try:
-                    cur.execute("""
-                        UPDATE invoices
-                        SET invoice_number = 'INV-' || printf('%06d', id)
-                        WHERE invoice_number IS NULL OR invoice_number = '';
-                    """)
-                except Exception:
-                    pass
-                try:
-                    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_invoice_number ON invoices (invoice_number);")
-                except Exception:
-                    pass
                 try:
                     tmp_conn.commit()
                 except Exception:
                     pass
+        finally:
+            if tmp_conn:
+                try:
+                    tmp_conn.close()
+                except Exception:
+                    pass
+    else:
+        # Fallback: run schema on local SQLite
+        # Ensure path and connection available
+        sqlite_path = DEFAULT_SQLITE_PATH
+        try:
+            # create parent dir
+            SQLITE_DIR = sqlite_path.parent
+            SQLITE_DIR.mkdir(parents=True, exist_ok=True)
         except Exception:
-            # any migration error should not break startup; print for diagnostics
+            pass
+
+        # Use a temporary connection for applying schema to avoid touching module _sqlite_conn state
+        import sqlite3 as _sqlite3
+        tmp_sqlite = None
+        try:
+            tmp_sqlite = _sqlite3.connect(str(sqlite_path))
+            tmp_sqlite.executescript(sql)
+        except Exception:
+            # best-effort: if executescript fails, try running statements individually
             try:
-                tmp_conn.rollback()
+                if tmp_sqlite:
+                    cur = tmp_sqlite.cursor()
+                    for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
+                        try:
+                            cur.execute(stmt)
+                        except Exception:
+                            pass
+                    try:
+                        tmp_sqlite.commit()
+                    except Exception:
+                        pass
             except Exception:
                 pass
         finally:
-            try:
-                tmp_conn.close()
-            except Exception:
-                pass
+            if tmp_sqlite:
+                try:
+                    tmp_sqlite.close()
+                except Exception:
+                    pass
 
 def test_connection():
     """Quick helper to test DB connectivity; returns True on success or raises on failure."""
