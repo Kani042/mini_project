@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Customers - Royal Mart{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+<div class="container">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h3>Customers</h3>
+      <small class="text-muted">List of customers (click Add Customer to create new)</small>
+    </div>
+    <div class="d-flex gap-2">
+      <a href="{{ url_for('customer_new') }}" class="btn btn-success">+ Add Customer</a>
+    </div>
+  </div>
+
+  <div class="mb-3">
+    <input id="customer-filter" class="form-control" placeholder="Search by name or mobile...">
+  </div>
+
+  <div class="table-responsive">
+    <table id="customers-table" class="table table-striped table-sm">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Mobile</th>
+          <th>Address</th>
+          <th>Email</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in customers %}
+        <tr>
+          <td>{{ c.name }}</td>
+          <td>{{ c.mobile }}</td>
+          <td>{{ c.address or '' }}</td>
+          <td>{{ c.email or '' }}</td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('customer_edit', customer_id=c.id) }}">Edit</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  // simple client-side filter for the customers table
+  (function(){
+    const input = document.getElementById('customer-filter');
+    const table = document.getElementById('customers-table').tBodies[0];
+    input.addEventListener('input', (e)=>{
+      const q = e.target.value.toLowerCase().trim();
+      for (const row of table.rows){
+        const name = (row.cells[0].textContent || '').toLowerCase();
+        const mobile = (row.cells[1].textContent || '').toLowerCase();
+        row.style.display = (!q || name.includes(q) || mobile.includes(q)) ? '' : 'none';
+      }
+    });
+  })();
+</script>
+{% endblock %}
