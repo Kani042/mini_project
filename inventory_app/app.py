@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from .db import get_db, init_db
 import time
 from datetime import date
+import re
 
 # Only load local .env when running in non-production and DATABASE_URL is not provided.
 if os.environ.get("FLASK_ENV", "").lower() != "production" and not os.environ.get("DATABASE_URL"):
@@ -277,19 +278,26 @@ def checkout():
   if request.method == "POST":
     conn = get_db()               # single DBConnection for this request
     try:
-      # Customer details submission
-      mobile = request.form["mobile"].strip()
+      # mobile is mandatory at checkout and must be 8 digits; name is optional
+      mobile = request.form.get("mobile", "").strip()
       name = request.form.get("name", "").strip()
+      if not mobile:
+        flash("Mobile number is required at checkout.")
+        return redirect(url_for("checkout"))
+      if not re.fullmatch(r"\d{8}", mobile):
+        flash("Mobile must be exactly 8 digits.")
+        return redirect(url_for("checkout"))
+ 
       tax_rate = float(request.form.get("tax_rate", "0"))
       payment_mode = request.form.get("payment_mode", "Cash")
-
+ 
       cart = session.get("checkout_cart", [])
       if not cart:
         flash("No items in cart.")
         return redirect(url_for("checkout"))
-
+ 
       admin_id = session.get("admin_id")
-
+ 
       # Validate stock (reads use same conn)
       for cart_item in cart:
         available_row = current_stock(conn, cart_item["item_id"])
@@ -301,20 +309,21 @@ def checkout():
         if cart_item["qty"] > available:
           flash(f"Not enough stock for {cart_item['name']}. Available: {available}.")
           return redirect(url_for("checkout"))
-
-      # Get or create user
+ 
+      # Get or create user (mobile guaranteed present)
       user = conn.execute("SELECT * FROM users WHERE mobile=%s", (mobile,)).fetchone()
+      user_id = None
       if not user:
-        conn.execute("INSERT INTO users (mobile, name) VALUES (%s, %s)", (mobile, name))
-        # do not commit yet — delay until entire transaction is successful
+        conn.execute("INSERT INTO users (mobile, name) VALUES (%s, %s)", (mobile, name or None))
         user = conn.execute("SELECT * FROM users WHERE mobile=%s", (mobile,)).fetchone()
-
+      user_id = user.get("id") if isinstance(user, dict) else (user["id"] if user else None)
+ 
       # Calculate totals
       subtotal = sum(item["unit_price"] * item["qty"] for item in cart)
       tax = round(subtotal * tax_rate, 2)
       total = round(subtotal + tax, 2)
       invoice_number = f"INV-{uuid.uuid4().hex[:10].upper()}"
-
+ 
       # Ensure payment_mode column exists (safe, idempotent)
       try:
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(invoices)").fetchall()] if conn.driver == "sqlite" else \
@@ -327,7 +336,7 @@ def checkout():
             pass
       except Exception:
         pass
-
+ 
       # Create invoice and ensure invoice_number is set at INSERT time.
       if conn.driver == "pg":
         # Postgres: reserve a sequence value from the invoices id sequence, build invoice_number, then insert with that id.
@@ -336,31 +345,21 @@ def checkout():
           seq_name = seq_row.get("seq") if seq_row else None
         except Exception:
           seq_name = None
-
+ 
         if seq_name:
           # get next sequence value
           nid_row = conn.execute("SELECT nextval(%s) AS nid", (seq_name,)).fetchone()
           invoice_id = nid_row.get("nid") if nid_row else None
         else:
           invoice_id = None
-
+ 
         if invoice_id:
           invoice_number = f"INV-{int(invoice_id):06d}"
           conn.execute(
             "INSERT INTO invoices (id, invoice_number, user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (invoice_id, invoice_number, user["id"], subtotal, tax, total, admin_id, payment_mode)
+            (invoice_id, invoice_number, user_id, subtotal, tax, total, admin_id, payment_mode)
           )
           conn.commit()
-          # conn.commit() closes the Postgres connection inside DBConnection,
-          # so open a fresh connection to read the inserted invoice
-          #          fresh = get_db()
-          #          try:
-          #            invoice = fresh.execute("SELECT * FROM invoices WHERE id=%s", (invoice_id,)).fetchone()
-          #          finally:
-          #            try:
-          #              fresh.rollback()
-          #            except Exception:
-          #              pass
           # use a fresh connection for further work (select + remaining inserts)
           conn = get_db()
           invoice = conn.execute("SELECT * FROM invoices WHERE id=%s", (invoice_id,)).fetchone()
@@ -368,7 +367,7 @@ def checkout():
           # Fallback: insert with RETURNING id and compute invoice_number afterwards (rare)
           row = conn.execute(
             "INSERT INTO invoices (user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (user["id"], subtotal, tax, total, admin_id, payment_mode)
+            (user_id, subtotal, tax, total, admin_id, payment_mode)
           ).fetchone()
           invoice_id = row["id"] if row else None
           invoice_number = f"INV-{int(invoice_id):06d}" if invoice_id else None
@@ -382,7 +381,7 @@ def checkout():
         # SQLite: insert then read last_insert_rowid(), then update invoice_number
         conn.execute(
           "INSERT INTO invoices (user_id, subtotal, tax, total, admin_id, payment_mode) VALUES (?, ?, ?, ?, ?, ?)",
-          (user["id"], subtotal, tax, total, admin_id, payment_mode)
+          (user_id, subtotal, tax, total, admin_id, payment_mode)
         )
         conn.commit()
         invoice_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone().get("id")
@@ -393,33 +392,33 @@ def checkout():
         # For SQLite the same connection is still valid; read directly
         invoice_row = conn.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,))
         invoice = invoice_row.fetchone() if hasattr(invoice_row, "fetchone") else invoice_row
-
+ 
       # Add invoice items and update stock (all on same conn)
       for cart_item in cart:
         item_id = cart_item["item_id"]
         qty = cart_item["qty"]
         unit_price = cart_item["unit_price"]
         line_total = round(unit_price * qty, 2)
-
+ 
         # Get current stock before reduction
         stock_before_row = conn.execute("SELECT COALESCE(SUM(delta_quantity),0) AS qty FROM inventory_stock WHERE item_id=%s", (item_id,)).fetchone()
         stock_before = stock_before_row.get("qty") if isinstance(stock_before_row, dict) else (stock_before_row["qty"] if stock_before_row else 0)
-
+ 
         # Add invoice item
         conn.execute(
           "INSERT INTO invoice_items (invoice_id, item_id, quantity, unit_price, line_total) VALUES (%s, %s, %s, %s, %s)",
           (invoice["id"], item_id, qty, unit_price, line_total)
         )
-
+ 
         # Reduce stock by adding negative delta
         conn.execute(
           "INSERT INTO inventory_stock (item_id, delta_quantity, reason) VALUES (%s, %s, %s)",
           (item_id, -qty, f"Sold - {invoice_number}")
         )
-
+ 
       # All operations succeeded — commit once
       conn.commit()
-
+ 
       # Clear cart from session
       session.pop("checkout_cart", None)
       return redirect(url_for("invoice_view", invoice_id=invoice["id"]))
@@ -803,6 +802,236 @@ def analytics():
         totals["total_amount"] += float(r["total_amount"] or 0.0)
 
     return render_template("analytics.html", payment_modes=payment_modes, selected=selected, rows=rows, totals=totals, selected_date=selected_date)
+
+@app.route("/inventory/<int:item_id>/edit", methods=["GET", "POST"])
+def inventory_edit(item_id):
+    if not require_admin():
+        return redirect(url_for("login"))
+    conn = get_db()
+    admin_id = session.get("admin_id")
+
+    # load item and verify ownership
+    item = conn.execute("SELECT * FROM inventory_items WHERE id=%s AND admin_id=%s", (item_id, admin_id)).fetchone()
+    if not item:
+        flash("Item not found or access denied.")
+        return redirect(url_for("dashboard"))
+
+    if request.method == "POST":
+        sku = request.form.get("sku", "").strip()
+        name = request.form.get("name", "").strip()
+        description = request.form.get("description", "").strip()
+        try:
+            unit_price = float(request.form.get("unit_price", 0))
+        except Exception:
+            flash("Invalid unit price.")
+            return redirect(url_for("inventory_edit", item_id=item_id))
+
+        if not sku or not name:
+            flash("SKU and name are required.")
+            return redirect(url_for("inventory_edit", item_id=item_id))
+
+        try:
+            conn.execute(
+                "UPDATE inventory_items SET sku=%s, name=%s, description=%s, unit_price=%s WHERE id=%s AND admin_id=%s",
+                (sku, name, description, unit_price, item_id, admin_id)
+            )
+            conn.commit()
+            flash("Product updated.")
+            return redirect(url_for("dashboard"))
+        except Exception as e:
+            # log and show friendly message
+            import traceback, sys
+            traceback.print_exc(file=sys.stderr)
+            flash("Failed to update product. SKU may be duplicate.")
+            return redirect(url_for("inventory_edit", item_id=item_id))
+
+    # GET -> render form with item values
+    return render_template("inventory_edit.html", item=item)
+
+# --- Customers: ensure columns + create and search endpoints ---
+def _ensure_user_columns(conn):
+    """Idempotently add address/email columns to users table if missing (best-effort)."""
+    try:
+        if conn.driver == "pg":
+            cols = [r["column_name"] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='users'").fetchall()]
+            if "address" not in cols:
+                try:
+                    conn.execute("ALTER TABLE users ADD COLUMN address TEXT")
+                except Exception:
+                    pass
+            if "email" not in cols:
+                try:
+                    conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+                except Exception:
+                    pass
+        else:
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "address" not in cols:
+                try:
+                    conn.execute("ALTER TABLE users ADD COLUMN address TEXT")
+                except Exception:
+                    pass
+            if "email" not in cols:
+                try:
+                    conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+                except Exception:
+                    pass
+    except Exception:
+        # don't break the request flow if introspection fails
+        pass
+
+@app.route("/customers/new", methods=["GET", "POST"])
+def customer_new():
+    if not require_admin():
+        return redirect(url_for("login"))
+    conn = get_db()
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        mobile = request.form.get("mobile", "").strip()
+        address = request.form.get("address", "").strip()
+        email = request.form.get("email", "").strip()
+
+        if not name or not mobile:
+            flash("Name and mobile are required.")
+            return redirect(url_for("customer_new"))
+
+        # enforce 8-digit mobile
+        if not re.fullmatch(r"\d{8}", mobile):
+            flash("Mobile must be exactly 8 digits.")
+            return redirect(url_for("customer_new"))
+        
+        # Ensure optional columns exist before insert
+        _ensure_user_columns(conn)
+
+        try:
+            conn.execute(
+                "INSERT INTO users (mobile, name, address, email) VALUES (%s, %s, %s, %s)",
+                (mobile, name, address or None, email or None)
+            )
+            conn.commit()
+            flash("Customer saved.")
+            return redirect(url_for("customer_new"))
+        except Exception as e:
+            # fall back: show friendly message and log
+            import traceback, sys
+            traceback.print_exc(file=sys.stderr)
+            flash("Failed to save customer. Mobile may already exist.")
+            return redirect(url_for("customer_new"))
+    return render_template("customer_new.html")
+
+@app.route("/customers/search")
+def customers_search():
+    """AJAX: return matching customers by name or mobile (case-insensitive). q param expected.
+    Public endpoint to support checkout autocomplete (behaves like product search)."""
+    q = request.args.get("q", "") or ""
+    q = q.strip()
+    if not q or len(q) < 1:
+        return jsonify([])
+
+    conn = get_db()
+    try:
+        if getattr(conn, "driver", "sqlite") == "pg":
+            rows = conn.execute("""
+                SELECT id, name, mobile, address, email
+                FROM users
+                WHERE name ILIKE %s OR mobile ILIKE %s
+                ORDER BY name
+                LIMIT 20
+            """, (f"%{q}%", f"%{q}%")).fetchall()
+        else:
+            # SQLite: use case-insensitive match with COLLATE NOCASE
+            rows = conn.execute("""
+                SELECT id, name, mobile, address, email
+                FROM users
+                WHERE name LIKE ? COLLATE NOCASE OR mobile LIKE ?
+                ORDER BY name
+                LIMIT 20
+            """, (f"%{q}%", f"%{q}%")).fetchall()
+
+        result = []
+        for r in rows:
+            # support RealDictRow or tuple-like rows
+            if isinstance(r, dict):
+                result.append({
+                    "id": r.get("id"),
+                    "name": r.get("name"),
+                    "mobile": r.get("mobile"),
+                    "address": r.get("address"),
+                    "email": r.get("email")
+                })
+            else:
+                # fallback by index
+                result.append({
+                    "id": r[0] if len(r) > 0 else None,
+                    "name": r[1] if len(r) > 1 else None,
+                    "mobile": r[2] if len(r) > 2 else None,
+                    "address": r[3] if len(r) > 3 else None,
+                    "email": r[4] if len(r) > 4 else None
+                })
+        return jsonify(result)
+    except Exception as e:
+        import traceback, sys
+        traceback.print_exc(file=sys.stderr)
+        return jsonify([]), 500
+
+@app.route("/customers")
+def customers_list():
+    if not require_admin():
+        return redirect(url_for("login"))
+    conn = get_db()
+    try:
+        if conn.driver == "pg":
+            customers = conn.execute("SELECT id, name, mobile, COALESCE(address,'') AS address, COALESCE(email,'') AS email FROM users ORDER BY name").fetchall()
+        else:
+            customers = conn.execute("SELECT id, name, mobile, COALESCE(address,'') AS address, COALESCE(email,'') AS email FROM users ORDER BY name").fetchall()
+    except Exception as e:
+        print("customers_list error:", e)
+        customers = []
+    return render_template("customers_list.html", customers=customers)
+
+@app.route("/customers/<int:customer_id>/edit", methods=["GET", "POST"])
+def customer_edit(customer_id):
+    if not require_admin():
+        return redirect(url_for("login"))
+    conn = get_db()
+    # load customer
+    cust = conn.execute("SELECT * FROM users WHERE id=%s", (customer_id,)).fetchone()
+    if not cust:
+        flash("Customer not found.")
+        return redirect(url_for("customers_list"))
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        mobile = request.form.get("mobile", "").strip()
+        address = request.form.get("address", "").strip()
+        email = request.form.get("email", "").strip()
+
+        if not name or not mobile:
+            flash("Name and mobile are required.")
+            return redirect(url_for("customer_edit", customer_id=customer_id))
+
+        # enforce 8-digit mobile
+        if not re.fullmatch(r"\d{8}", mobile):
+            flash("Mobile must be exactly 8 digits.")
+            return redirect(url_for("customer_edit", customer_id=customer_id))
+
+        try:
+            conn.execute(
+                "UPDATE users SET name=%s, mobile=%s, address=%s, email=%s WHERE id=%s",
+                (name, mobile, address or None, email or None, customer_id)
+            )
+            conn.commit()
+            flash("Customer updated.")
+            return redirect(url_for("customers_list"))
+        except Exception as e:
+            import traceback, sys
+            traceback.print_exc(file=sys.stderr)
+            flash("Failed to update customer. Mobile may already exist.")
+            return redirect(url_for("customer_edit", customer_id=customer_id))
+
+    # GET -> render edit form
+    return render_template("customer_edit.html", customer=cust)
 
 if __name__ == "__main__":
   app.run(debug=True)
